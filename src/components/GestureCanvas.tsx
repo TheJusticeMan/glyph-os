@@ -138,9 +138,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
       onPanResponderMove: (evt, gestureState: PanResponderGestureState) => {
         // Cancel long-press if the finger has moved more than 10px
         if (longPressTimerRef.current !== null) {
-          const totalMovement = Math.sqrt(
-            gestureState.dx * gestureState.dx + gestureState.dy * gestureState.dy
-          );
+          const totalMovement = Math.hypot(gestureState.dx, gestureState.dy);
           if (totalMovement > 10) {
             clearTimeout(longPressTimerRef.current);
             longPressTimerRef.current = null;

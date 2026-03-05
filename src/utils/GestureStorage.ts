@@ -90,7 +90,7 @@ export async function loadGestures(): Promise<SavedGesture[]> {
     if (json === null) return [];
 
     const store = migrate(JSON.parse(json));
-    return store.gestures ?? [];
+    return store.gestures;
   } catch {
     return [];
   }

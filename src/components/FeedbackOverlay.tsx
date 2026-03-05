@@ -40,9 +40,9 @@ interface PillStyle {
 
 const PILL_STYLE_MAP: Record<FeedbackType, PillStyle> = {
   launching: { backgroundColor: '#003333', borderColor: '#00FFCC' },
-  no_match:  { backgroundColor: '#222222', borderColor: '#666666' },
-  saved:     { backgroundColor: '#003300', borderColor: '#00CC44' },
-  error:     { backgroundColor: '#330000', borderColor: '#CC0000' },
+  no_match: { backgroundColor: '#222222', borderColor: '#666666' },
+  saved: { backgroundColor: '#003300', borderColor: '#00CC44' },
+  error: { backgroundColor: '#330000', borderColor: '#CC0000' },
 };
 
 // ---------------------------------------------------------------------------
