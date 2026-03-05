@@ -5,7 +5,10 @@
  *  1. Captures raw touch points via PanResponder.
  *  2. Renders the stroke in real-time with react-native-svg.
  *  3. On finger-release: normalises the stroke, attempts to match a saved
- *     gesture, and either launches the associated app or saves the new gesture.
+ *     gesture, and either launches the associated app or triggers the
+ *     bind-gesture flow for unrecognised / unbound gestures.
+ *  4. Detects a long-press (finger held for ≥600 ms) as an escape hatch to
+ *     open the Gesture Manager.
  */
 
 import React, { useCallback, useRef, useState } from 'react';
@@ -17,14 +20,30 @@ import { Point, normalizeTo40Points } from '../utils/GestureNormalizer';
 import { SavedGesture, buildSignature, matchGesture } from '../utils/GestureMatcher';
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** How long (ms) the user must hold a finger still to trigger the escape hatch. */
+const LONG_PRESS_DURATION = 600;
+
+// ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface GestureCanvasProps {
   /** Persisted gesture library shared with the parent (App). */
   savedGestures: SavedGesture[];
-  /** Called when a new, unrecognised gesture should be persisted. */
-  onSaveGesture: (gesture: SavedGesture) => void;
+  /**
+   * Called when a gesture is drawn that is either unrecognised or recognised
+   * but not yet bound to an app.  The parent should show the bind-gesture UI.
+   */
+  onBindGesture: (gesture: SavedGesture) => void;
+  /** Called when an app is successfully launched. */
+  onLaunchApp?: (label: string) => void;
+  /** Called when a gesture is drawn but no match is found (and it is recorded). */
+  onNewGesture?: () => void;
+  /** Called to open the gesture management / settings screen. */
+  onOpenSettings: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -44,9 +63,25 @@ function buildPathD(points: Point[]): string {
 // Component
 // ---------------------------------------------------------------------------
 
-const GestureCanvas: React.FC<GestureCanvasProps> = ({ savedGestures, onSaveGesture }) => {
+const GestureCanvas: React.FC<GestureCanvasProps> = ({
+  savedGestures,
+  onBindGesture,
+  onLaunchApp,
+  onNewGesture,
+  onOpenSettings,
+}) => {
   const rawPointsRef = useRef<Point[]>([]);
   const [pathD, setPathD] = useState<string>('');
+
+  // Long-press timer ref – cleared on move or release
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
 
   // -------------------------------------------------------------------------
   // Gesture completion handler
@@ -65,30 +100,24 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ savedGestures, onSaveGest
       if (match) {
         const { gesture } = match;
         if (gesture.packageName) {
-          console.log(`Launching app: ${gesture.packageName}`);
           RNLauncherKitHelper.launchApplication(gesture.packageName);
+          onLaunchApp?.(gesture.label);
         } else {
-          // Gesture label-only match: no app is mapped yet, treat as unrecognised
-          console.log(`Gesture "${gesture.label}" has no app mapped. Saving as new gesture.`);
-          const signature = buildSignature(normalizedPoints);
-          const newGesture: SavedGesture = {
-            label: `gesture_${Date.now()}`,
-            signature,
-          };
-          onSaveGesture(newGesture);
+          // Recognised gesture but no app bound yet – re-prompt for binding
+          onBindGesture({ ...gesture });
         }
       } else {
-        // No match – persist the new gesture signature
+        // Unrecognised gesture – create a pending gesture and open bind flow
         const signature = buildSignature(normalizedPoints);
         const newGesture: SavedGesture = {
           label: `gesture_${Date.now()}`,
           signature,
         };
-        console.log(`Saving new gesture: ${newGesture.label}`);
-        onSaveGesture(newGesture);
+        onNewGesture?.();
+        onBindGesture(newGesture);
       }
     },
-    [savedGestures, onSaveGesture]
+    [savedGestures, onBindGesture, onLaunchApp, onNewGesture]
   );
 
   // -------------------------------------------------------------------------
@@ -103,15 +132,25 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ savedGestures, onSaveGest
         const { locationX, locationY } = evt.nativeEvent;
         rawPointsRef.current = [{ x: locationX, y: locationY }];
         setPathD(buildPathD(rawPointsRef.current));
+
+        // Start long-press timer for escape hatch
+        longPressTimerRef.current = setTimeout(() => {
+          rawPointsRef.current = [];
+          setPathD('');
+          onOpenSettings();
+        }, LONG_PRESS_DURATION);
       },
 
       onPanResponderMove: (evt, _gestureState: PanResponderGestureState) => {
+        // Any movement cancels the long-press intent
+        clearLongPress();
         const { locationX, locationY } = evt.nativeEvent;
         rawPointsRef.current.push({ x: locationX, y: locationY });
         setPathD(buildPathD(rawPointsRef.current));
       },
 
       onPanResponderRelease: (_evt, _gestureState: PanResponderGestureState) => {
+        clearLongPress();
         handleGestureComplete(rawPointsRef.current);
         // Clear the canvas after a short delay so the user can see the path
         setTimeout(() => {
@@ -121,6 +160,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ savedGestures, onSaveGest
       },
 
       onPanResponderTerminate: () => {
+        clearLongPress();
         rawPointsRef.current = [];
         setPathD('');
       },
