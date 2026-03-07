@@ -21,8 +21,14 @@ export interface AppDetail {
   label: string;
   packageName: string;
   /**
-   * App icon – may be a raw base64 string, a full `data:image/...;base64,` URI,
-   * or absent for some system apps.  Use `getIconUri()` to normalise.
+   * App icon value returned by react-native-launcher-kit.
+   *
+   * The library changed its return format between versions:
+   *  - **v2.x (current npm):** raw base64-encoded PNG string
+   *  - **latest GitHub:** absolute file-system path (e.g. `/data/…/com.example.png`)
+   *
+   * Always pass this field through `getIconUri()` rather than using it directly
+   * so both formats (and absent icons) are handled uniformly.
    */
   icon?: string;
   version?: string;
@@ -108,13 +114,20 @@ export function filterApps(apps: AppDetail[], query: string): AppDetail[] {
 /**
  * Converts an app's raw icon value into a URI suitable for `<Image source={{ uri }}>`.
  *
- * Handles three cases from react-native-launcher-kit:
- *  - Already a data URI (`data:image/...;base64,...`) → returned as-is
- *  - Raw base64 string → prefixed with `data:image/png;base64,`
- *  - Absent / empty → returns `null` (caller should show a placeholder)
+ * Handles every format react-native-launcher-kit has ever returned:
+ *
+ * | Input                                | Treatment                          |
+ * |--------------------------------------|------------------------------------|
+ * | absent / empty                       | returns `null` → show placeholder  |
+ * | `file:///…` (already a file URI)     | returned as-is                     |
+ * | `/data/…` (absolute file-system path)| prefixed with `file://`            |
+ * | `data:image/…;base64,…` (data URI)   | returned as-is                     |
+ * | anything else                        | treated as raw base64 PNG          |
  */
 export function getIconUri(icon: string | undefined | null): string | null {
   if (!icon) return null;
+  if (icon.startsWith('file://')) return icon;
+  if (icon.startsWith('/')) return `file://${icon}`;
   if (icon.startsWith('data:')) return icon;
   return `data:image/png;base64,${icon}`;
 }

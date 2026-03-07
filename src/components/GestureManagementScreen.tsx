@@ -97,7 +97,7 @@ const GesturePreview: React.FC<GesturePreviewProps> = React.memo(({ points }) =>
           />
         </Svg>
       ) : (
-        <Text style={styles.previewEmpty} accessibilityLabel="No preview available">?</Text>
+        <Text style={styles.previewEmpty} accessibilityLabel="Gesture preview unavailable">?</Text>
       )}
     </View>
   );

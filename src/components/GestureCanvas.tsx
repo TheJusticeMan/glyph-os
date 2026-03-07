@@ -248,35 +248,37 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
   // latest stroke.
   const trailSegments = trailEffect ? buildTrailSegments(rawPointsRef.current) : null;
 
+  // Build the SVG stroke content once so the JSX below stays readable.
+  let strokeContent: React.ReactNode = null;
+  if (trailSegments) {
+    strokeContent = trailSegments.map((seg, i) => (
+      <Path
+        key={i}
+        d={seg.d}
+        stroke="#00FFCC"
+        strokeWidth={seg.strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+        opacity={seg.opacity}
+      />
+    ));
+  } else if (pathD) {
+    strokeContent = (
+      <Path
+        d={pathD}
+        stroke="#00FFCC"
+        strokeWidth={3}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    );
+  }
+
   return (
     <View style={styles.container} {...panResponder.panHandlers}>
-      <Svg style={StyleSheet.absoluteFill}>
-        {trailSegments
-          ? trailSegments.map((seg, i) => (
-              <Path
-                key={i}
-                d={seg.d}
-                stroke="#00FFCC"
-                strokeWidth={seg.strokeWidth}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-                opacity={seg.opacity}
-              />
-            ))
-          : pathD
-            ? (
-              <Path
-                d={pathD}
-                stroke="#00FFCC"
-                strokeWidth={3}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-              />
-            )
-            : null}
-      </Svg>
+      <Svg style={StyleSheet.absoluteFill}>{strokeContent}</Svg>
     </View>
   );
 };
