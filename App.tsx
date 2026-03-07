@@ -10,9 +10,10 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BackHandler, SafeAreaView, StyleSheet } from 'react-native';
+import { BackHandler, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import GestureCanvas from './src/components/GestureCanvas';
 import GestureManagementScreen from './src/components/GestureManagementScreen';
@@ -166,37 +167,40 @@ export default function App() {
   // Render – main launcher UI
   // -------------------------------------------------------------------------
   return (
-    <SafeAreaView style={styles.root}>
-      <StatusBar style="light" hidden />
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.root}>
+        <StatusBar style="light" hidden />
 
-      <GestureCanvas
-        savedGestures={savedGestures}
-        onOpenManagement={() => setShowManagement(true)}
-        onRequestAssignApp={handleRequestAssignApp}
-        onFeedback={showFeedback}
-      />
-
-      {showManagement && (
-        <GestureManagementScreen
-          gestures={savedGestures}
-          onUpdateGesture={handleUpdateGesture}
-          onDeleteGesture={handleDeleteGesture}
-          onClearAll={handleClearAll}
-          onClose={() => setShowManagement(false)}
+        <GestureCanvas
+          savedGestures={savedGestures}
+          onOpenManagement={() => setShowManagement(true)}
+          onRequestAssignApp={handleRequestAssignApp}
+          onFeedback={showFeedback}
         />
-      )}
 
-      <AssignAppModal
-        visible={pendingGesture !== null}
-        onAssign={handleAssignApp}
-        onCancel={handleCancelAssign}
-      />
+        {showManagement && (
+          <GestureManagementScreen
+            gestures={savedGestures}
+            onUpdateGesture={handleUpdateGesture}
+            onDeleteGesture={handleDeleteGesture}
+            onClearAll={handleClearAll}
+            onClose={() => setShowManagement(false)}
+          />
+        )}
 
-      <FeedbackOverlay
-        message={feedback?.message ?? null}
-        type={feedback?.type ?? 'saved'}
-      />
-    </SafeAreaView>
+        <AssignAppModal
+          visible={pendingGesture !== null}
+          onAssign={handleAssignApp}
+          onCancel={handleCancelAssign}
+        />
+
+        <FeedbackOverlay
+          message={feedback?.message ?? null}
+          type={feedback?.type ?? 'saved'}
+        />
+
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

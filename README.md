@@ -39,6 +39,14 @@ npm run android    # Build and run on connected Android device/emulator
 npm start          # Start Expo dev server only
 ```
 
+`react-native-launcher-kit` is a native module and does not work in Expo Go.
+If the app list is empty or you see a linking error, install/run a native
+build with `npm run android` and then connect Metro with:
+
+```bash
+npx expo start --dev-client
+```
+
 ### Tests
 
 ```bash
@@ -121,19 +129,19 @@ You can also trigger the workflow manually from the **Actions** tab using `workf
 
 ## Architecture
 
-| File | Responsibility |
-|------|---------------|
-| `App.tsx` | Root: state management, persistence, navigation between screens |
-| `src/components/GestureCanvas.tsx` | Touch capture, stroke rendering, gesture recognition |
-| `src/components/AssignAppModal.tsx` | App picker modal with search |
-| `src/components/GestureManagementScreen.tsx` | Gesture library CRUD |
-| `src/components/OnboardingScreen.tsx` | First-run tutorial |
-| `src/components/FeedbackOverlay.tsx` | Toast-style feedback |
-| `src/utils/GestureNormalizer.ts` | Resamples raw touch points to 40 equidistant points |
-| `src/utils/GestureMatcher.ts` | Turning-angle signature + Euclidean/cosine matching |
-| `src/utils/GestureStorage.ts` | AsyncStorage persistence with schema versioning |
-| `src/services/InstalledAppsService.ts` | Fetches & caches installed apps list |
-| `src/hooks/useInstalledApps.ts` | React hook wrapping the apps service |
+| File                                         | Responsibility                                                  |
+| -------------------------------------------- | --------------------------------------------------------------- |
+| `App.tsx`                                    | Root: state management, persistence, navigation between screens |
+| `src/components/GestureCanvas.tsx`           | Touch capture, stroke rendering, gesture recognition            |
+| `src/components/AssignAppModal.tsx`          | App picker modal with search                                    |
+| `src/components/GestureManagementScreen.tsx` | Gesture library CRUD                                            |
+| `src/components/OnboardingScreen.tsx`        | First-run tutorial                                              |
+| `src/components/FeedbackOverlay.tsx`         | Toast-style feedback                                            |
+| `src/utils/GestureNormalizer.ts`             | Resamples raw touch points to 40 equidistant points             |
+| `src/utils/GestureMatcher.ts`                | Turning-angle signature + Euclidean/cosine matching             |
+| `src/utils/GestureStorage.ts`                | AsyncStorage persistence with schema versioning                 |
+| `src/services/InstalledAppsService.ts`       | Fetches & caches installed apps list                            |
+| `src/hooks/useInstalledApps.ts`              | React hook wrapping the apps service                            |
 
 ## Known Limitations
 

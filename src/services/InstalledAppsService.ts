@@ -6,7 +6,11 @@
  * Provides filtering utilities used by search/drawer components.
  */
 
-import { InstalledApps } from 'react-native-launcher-kit';
+type LauncherKitModule = {
+  InstalledApps: {
+    getSortedApps: () => Promise<AppDetail[]>;
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +31,31 @@ export interface AppDetail {
 // ---------------------------------------------------------------------------
 
 let cachedApps: AppDetail[] | null = null;
+let launcherKitModule: LauncherKitModule | null | undefined;
+
+function getLauncherKitModule(): LauncherKitModule | null {
+  if (launcherKitModule !== undefined) {
+    return launcherKitModule;
+  }
+
+  try {
+    const mod = require('react-native-launcher-kit') as Partial<LauncherKitModule>;
+    launcherKitModule = mod?.InstalledApps?.getSortedApps ? (mod as LauncherKitModule) : null;
+  } catch {
+    launcherKitModule = null;
+  }
+
+  return launcherKitModule;
+}
+
+function buildUnavailableMessage(): string {
+  return [
+    'Installed apps are unavailable in the current runtime.',
+    'Use a native Android build instead of Expo Go:',
+    '1. npm run android',
+    '2. npx expo start --dev-client',
+  ].join('\n');
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -43,15 +72,18 @@ export async function getInstalledApps(forceRefresh?: boolean): Promise<AppDetai
     return cachedApps;
   }
 
+  const launcherKit = getLauncherKitModule();
+  if (!launcherKit) {
+    throw new Error(buildUnavailableMessage());
+  }
+
   try {
-    const apps = await InstalledApps.getSortedApps();
+    const apps = await launcherKit.InstalledApps.getSortedApps();
     cachedApps = apps;
     return cachedApps;
   } catch (err) {
-    // Native call can fail on first boot or when permissions are not yet
-    // granted; return an empty list so the UI degrades gracefully.
-    console.warn('[InstalledAppsService] getSortedApps failed:', err);
-    return [];
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load installed apps. ${message}`);
   }
 }
 
