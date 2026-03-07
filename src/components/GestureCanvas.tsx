@@ -38,6 +38,8 @@ interface GestureCanvasProps {
    * to preserve performance (default: false).
    */
   trailEffect?: boolean;
+  /** When true, a stored gesture can also match when drawn in reverse direction. */
+  allowBackwardGestures?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +121,32 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
   onRequestAssignApp,
   onFeedback,
   trailEffect = false,
+  allowBackwardGestures = false,
 }) => {
   const rawPointsRef = useRef<Point[]>([]);
   const [pathD, setPathD] = useState<string>('');
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearCanvasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTriggeredRef = useRef(false);
+
+  const clearCanvasNow = useCallback(() => {
+    rawPointsRef.current = [];
+    setPathD('');
+  }, []);
+
+  const clearLongPressTimer = useCallback(() => {
+    if (longPressTimerRef.current !== null) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const clearCanvasTimer = useCallback(() => {
+    if (clearCanvasTimerRef.current !== null) {
+      clearTimeout(clearCanvasTimerRef.current);
+      clearCanvasTimerRef.current = null;
+    }
+  }, []);
 
   // -------------------------------------------------------------------------
   // Gesture completion handler
@@ -136,7 +160,9 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
         return;
       }
 
-      const match = matchGesture(normalizedPoints, savedGestures);
+      const match = matchGesture(normalizedPoints, savedGestures, {
+        allowBackward: allowBackwardGestures,
+      });
 
       if (match) {
         const { gesture } = match;
@@ -162,7 +188,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
         onFeedback('New gesture! Assign an app.', 'no_match');
       }
     },
-    [savedGestures, onRequestAssignApp, onFeedback]
+    [savedGestures, onRequestAssignApp, onFeedback, allowBackwardGestures]
   );
 
   // Keep a stable ref so the PanResponder (created once) always calls the
@@ -186,6 +212,10 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
       onMoveShouldSetPanResponder: () => true,
 
       onPanResponderGrant: (evt) => {
+        clearCanvasTimer();
+        clearLongPressTimer();
+        longPressTriggeredRef.current = false;
+
         const { locationX, locationY } = evt.nativeEvent;
         rawPointsRef.current = [{ x: locationX, y: locationY }];
         setPathD(buildPathD(rawPointsRef.current));
@@ -193,19 +223,22 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
         // Start long-press timer
         longPressTimerRef.current = setTimeout(() => {
           longPressTimerRef.current = null;
-          rawPointsRef.current = [];
-          setPathD('');
+          longPressTriggeredRef.current = true;
+          clearCanvasNow();
           onOpenManagementRef.current();
         }, 800);
       },
 
       onPanResponderMove: (evt, gestureState: PanResponderGestureState) => {
+        if (longPressTriggeredRef.current) {
+          return;
+        }
+
         // Cancel long-press if the finger has moved more than 10px
         if (longPressTimerRef.current !== null) {
           const totalMovement = Math.hypot(gestureState.dx, gestureState.dy);
           if (totalMovement > 10) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
+            clearLongPressTimer();
           }
         }
 
@@ -215,29 +248,37 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
       },
 
       onPanResponderRelease: (_evt, _gestureState: PanResponderGestureState) => {
-        if (longPressTimerRef.current !== null) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
+        clearLongPressTimer();
+
+        if (longPressTriggeredRef.current) {
+          longPressTriggeredRef.current = false;
+          clearCanvasNow();
+          return;
         }
 
         handleGestureCompleteRef.current(rawPointsRef.current);
+
         // Clear the canvas after a short delay so the user can see the path
-        setTimeout(() => {
-          rawPointsRef.current = [];
-          setPathD('');
+        clearCanvasTimerRef.current = setTimeout(() => {
+          clearCanvasNow();
+          clearCanvasTimerRef.current = null;
         }, 400);
       },
 
       onPanResponderTerminate: () => {
-        if (longPressTimerRef.current !== null) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-        rawPointsRef.current = [];
-        setPathD('');
+        clearLongPressTimer();
+        longPressTriggeredRef.current = false;
+        clearCanvasNow();
       },
     })
   ).current;
+
+  useEffect(() => {
+    return () => {
+      clearLongPressTimer();
+      clearCanvasTimer();
+    };
+  }, [clearCanvasTimer, clearLongPressTimer]);
 
   // -------------------------------------------------------------------------
   // Render

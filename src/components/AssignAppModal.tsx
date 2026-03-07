@@ -6,7 +6,7 @@
  * via the `onAssign` callback.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -32,6 +32,7 @@ interface AssignAppModalProps {
   visible: boolean;
   onAssign: (app: AppDetail) => void;
   onCancel: () => void;
+  prioritizedPackageNames?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -76,18 +77,45 @@ const AppRow: React.FC<AppRowProps> = React.memo(({ app, onPress }) => {
 // Component
 // ---------------------------------------------------------------------------
 
-const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCancel }) => {
+const AssignAppModal: React.FC<AssignAppModalProps> = ({
+  visible,
+  onAssign,
+  onCancel,
+  prioritizedPackageNames = [],
+}) => {
   const [query, setQuery] = useState<string>('');
+  const searchInputRef = useRef<TextInput | null>(null);
   const { apps, loading, error, refresh } = useInstalledApps();
 
   // Reset search query each time the modal opens.
   useEffect(() => {
     if (visible) {
       setQuery('');
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 80);
     }
   }, [visible]);
 
-  const filteredApps = useMemo(() => filterApps(apps, query), [apps, query]);
+  const priorityOrder = useMemo(() => {
+    const map = new Map<string, number>();
+    prioritizedPackageNames.forEach((name, index) => {
+      map.set(name, index);
+    });
+    return map;
+  }, [prioritizedPackageNames]);
+
+  const filteredApps = useMemo(() => {
+    const base = filterApps(apps, query);
+    return [...base].sort((a, b) => {
+      const rankA = priorityOrder.get(a.packageName) ?? Number.POSITIVE_INFINITY;
+      const rankB = priorityOrder.get(b.packageName) ?? Number.POSITIVE_INFINITY;
+      if (rankA !== rankB) {
+        return rankA - rankB;
+      }
+      return 0;
+    });
+  }, [apps, query, priorityOrder]);
 
   const handleAssign = useCallback(
     (app: AppDetail) => {
@@ -156,6 +184,7 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCa
         <Text style={styles.title}>Assign App to Gesture</Text>
 
         <TextInput
+          ref={searchInputRef}
           style={styles.searchBar}
           placeholder="Search apps…"
           placeholderTextColor="#555"
@@ -164,7 +193,12 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCa
           autoCorrect={false}
           autoCapitalize="none"
           returnKeyType="search"
+          autoFocus
         />
+
+        {query.trim() === '' && prioritizedPackageNames.length > 0 && (
+          <Text style={styles.hintText}>Top 5 similar apps are pinned first</Text>
+        )}
 
         {renderContent()}
 
@@ -204,6 +238,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     marginBottom: 12,
+  },
+  hintText: {
+    color: '#6F6F6F',
+    fontSize: 12,
+    marginBottom: 8,
   },
   listContent: {
     paddingBottom: 8,

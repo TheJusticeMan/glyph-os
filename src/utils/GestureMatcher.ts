@@ -38,6 +38,21 @@ export interface MatchResult {
   angularDifference: number;
 }
 
+export interface SimilarAppMatch {
+  packageName: string;
+  angularDifference: number;
+}
+
+export interface BlendBoundsResult {
+  canMerge: boolean;
+  minT: number;
+  maxT: number;
+}
+
+export interface MatchGestureOptions {
+  allowBackward?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Angular-difference matching (ported from gesture-handler.ts)
 // ---------------------------------------------------------------------------
@@ -80,6 +95,18 @@ export function calculateDifference(line1: Point[], line2: Point[]): number {
   return totalDiff / (n - 1);
 }
 
+/** Returns the smaller score between forward and optional reversed-reference matching. */
+export function calculateBestDirectionDifference(
+  candidate: Point[],
+  reference: Point[],
+  allowBackward: boolean,
+): number {
+  const forward = calculateDifference(candidate, reference);
+  if (!allowBackward) return forward;
+  const reversed = calculateDifference(candidate, [...reference].reverse());
+  return Math.min(forward, reversed);
+}
+
 /**
  * Finds the closest saved gesture for the given 40-point normalised input.
  *
@@ -90,9 +117,12 @@ export function calculateDifference(line1: Point[], line2: Point[]): number {
  */
 export function matchGesture(
   normalizedPoints: Point[],
-  savedGestures: SavedGesture[]
+  savedGestures: SavedGesture[],
+  options?: MatchGestureOptions,
 ): MatchResult | null {
   if (savedGestures.length === 0) return null;
+
+  const allowBackward = options?.allowBackward ?? false;
 
   let best: MatchResult | null = null;
   let minDiff = Infinity;
@@ -100,7 +130,11 @@ export function matchGesture(
   for (const gesture of savedGestures) {
     if (!gesture.normalizedPath || gesture.normalizedPath.length < 2) continue;
 
-    const diff = calculateDifference(normalizedPoints, gesture.normalizedPath);
+    const diff = calculateBestDirectionDifference(
+      normalizedPoints,
+      gesture.normalizedPath,
+      allowBackward,
+    );
     if (diff < minDiff) {
       minDiff = diff;
       best = { gesture, angularDifference: diff };
@@ -111,6 +145,143 @@ export function matchGesture(
     return best;
   }
   return null;
+}
+
+/**
+ * Returns the most similar apps (best angular score per package) for a
+ * candidate gesture. The ranking is global over all saved app-bound gestures.
+ */
+export function rankSimilarApps(
+  normalizedPoints: Point[],
+  savedGestures: SavedGesture[],
+  limit = 5,
+  options?: MatchGestureOptions,
+): SimilarAppMatch[] {
+  const allowBackward = options?.allowBackward ?? false;
+  const byPackage = new Map<string, number>();
+
+  for (const gesture of savedGestures) {
+    if (!gesture.packageName) continue;
+    if (!gesture.normalizedPath || gesture.normalizedPath.length < 2) continue;
+
+    const diff = calculateBestDirectionDifference(
+      normalizedPoints,
+      gesture.normalizedPath,
+      allowBackward,
+    );
+    const current = byPackage.get(gesture.packageName);
+    if (current === undefined || diff < current) {
+      byPackage.set(gesture.packageName, diff);
+    }
+  }
+
+  return Array.from(byPackage.entries())
+    .map(([packageName, angularDifference]) => ({ packageName, angularDifference }))
+    .sort((a, b) => {
+      if (a.angularDifference !== b.angularDifference) {
+        return a.angularDifference - b.angularDifference;
+      }
+      return a.packageName.localeCompare(b.packageName);
+    })
+    .slice(0, Math.max(0, limit));
+}
+
+/**
+ * Blends two normalized paths with interpolation factor `t` in [0, 1].
+ * t=0 returns lineA, t=1 returns lineB.
+ */
+export function blendNormalizedPaths(lineA: Point[], lineB: Point[], t: number): Point[] {
+  const n = Math.min(lineA.length, lineB.length);
+  if (n < 2) return [];
+  const clamped = Math.max(0, Math.min(1, t));
+
+  const blended: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    blended.push({
+      x: lineA[i].x * (1 - clamped) + lineB[i].x * clamped,
+      y: lineA[i].y * (1 - clamped) + lineB[i].y * clamped,
+    });
+  }
+  return blended;
+}
+
+/**
+ * True when `candidate` is within the configured angular threshold of
+ * `reference`.
+ */
+export function isWithinThreshold(
+  candidate: Point[],
+  reference: Point[],
+  threshold = ANGULAR_THRESHOLD,
+): boolean {
+  return calculateDifference(candidate, reference) < threshold;
+}
+
+/**
+ * Uses trial steps plus binary refinement to find the widest contiguous interval
+ * around t=0.5 where a blended path is still detectable as both source paths.
+ */
+export function findBlendBoundsForDualMatch(
+  oldPath: Point[],
+  newPath: Point[],
+): BlendBoundsResult {
+  const midpoint = blendNormalizedPaths(oldPath, newPath, 0.5);
+  const matchesBoth = (candidate: Point[]): boolean =>
+    isWithinThreshold(candidate, oldPath) && isWithinThreshold(candidate, newPath);
+
+  if (midpoint.length < 2 || !matchesBoth(midpoint)) {
+    return { canMerge: false, minT: 0.5, maxT: 0.5 };
+  }
+
+  const matchesAt = (t: number): boolean => matchesBoth(blendNormalizedPaths(oldPath, newPath, t));
+  const step = 0.05;
+  const iterations = 18;
+
+  let left = 0.5;
+  while (left - step >= 0 && matchesAt(left - step)) {
+    left -= step;
+  }
+
+  let right = 0.5;
+  while (right + step <= 1 && matchesAt(right + step)) {
+    right += step;
+  }
+
+  let minT = left;
+  if (left > 0 && !matchesAt(0)) {
+    let lo = Math.max(0, left - step);
+    let hi = left;
+    for (let i = 0; i < iterations; i++) {
+      const mid = (lo + hi) / 2;
+      if (matchesAt(mid)) {
+        hi = mid;
+      } else {
+        lo = mid;
+      }
+    }
+    minT = hi;
+  } else if (matchesAt(0)) {
+    minT = 0;
+  }
+
+  let maxT = right;
+  if (right < 1 && !matchesAt(1)) {
+    let lo = right;
+    let hi = Math.min(1, right + step);
+    for (let i = 0; i < iterations; i++) {
+      const mid = (lo + hi) / 2;
+      if (matchesAt(mid)) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    maxT = lo;
+  } else if (matchesAt(1)) {
+    maxT = 1;
+  }
+
+  return { canMerge: true, minT, maxT };
 }
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import {
   Alert,
   FlatList,
   ListRenderItemInfo,
+  Modal,
   StyleSheet,
   Switch,
   Text,
@@ -26,6 +27,7 @@ import Svg, { Path } from 'react-native-svg';
 import type { AppDetail } from '../services/InstalledAppsService';
 import type { SavedGesture } from '../utils/GestureMatcher';
 import type { Point } from '../utils/GestureNormalizer';
+import useInstalledApps from '../hooks/useInstalledApps';
 import AssignAppModal from './AssignAppModal';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +42,10 @@ interface GestureManagementScreenProps {
   onClose: () => void;
   trailEffect: boolean;
   onToggleTrailEffect: () => void;
+  launchOnCreateShortcut: boolean;
+  onToggleLaunchOnCreateShortcut: () => void;
+  allowBackwardGestures: boolean;
+  onToggleAllowBackwardGestures: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,11 +115,17 @@ const GesturePreview: React.FC<GesturePreviewProps> = React.memo(({ points }) =>
 
 interface GestureRowProps {
   gesture: SavedGesture;
+  appLabel: string;
   onReassign: (label: string) => void;
   onDelete: (label: string) => void;
 }
 
-const GestureRow: React.FC<GestureRowProps> = React.memo(({ gesture, onReassign, onDelete }) => {
+const GestureRow: React.FC<GestureRowProps> = React.memo(({
+  gesture,
+  appLabel,
+  onReassign,
+  onDelete,
+}) => {
   const handleReassign = useCallback(() => onReassign(gesture.label), [gesture.label, onReassign]);
   const handleDelete = useCallback(() => onDelete(gesture.label), [gesture.label, onDelete]);
 
@@ -122,7 +134,7 @@ const GestureRow: React.FC<GestureRowProps> = React.memo(({ gesture, onReassign,
       <GesturePreview points={gesture.normalizedPath ?? []} />
       <View style={styles.rowInfo}>
         <Text style={styles.gestureLabel} numberOfLines={1}>
-          {gesture.label}
+          {appLabel}
         </Text>
         {gesture.packageName ? (
           <Text style={styles.packageName} numberOfLines={1}>
@@ -156,8 +168,13 @@ const GestureManagementScreen: React.FC<GestureManagementScreenProps> = ({
   onClose,
   trailEffect,
   onToggleTrailEffect,
+  launchOnCreateShortcut,
+  onToggleLaunchOnCreateShortcut,
+  allowBackwardGestures,
+  onToggleAllowBackwardGestures,
 }) => {
   const [reassignTarget, setReassignTarget] = useState<string | null>(null);
+  const { apps } = useInstalledApps();
 
   // -------------------------------------------------------------------------
   // Handlers
@@ -220,11 +237,32 @@ const GestureManagementScreen: React.FC<GestureManagementScreenProps> = ({
 
   const keyExtractor = useCallback((item: SavedGesture) => item.label, []);
 
+  const appLabelByPackage = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const app of apps) {
+      map.set(app.packageName, app.label);
+    }
+    return map;
+  }, [apps]);
+
+  const getDisplayAppLabel = useCallback(
+    (gesture: SavedGesture): string => {
+      if (!gesture.packageName) return 'No app assigned';
+      return appLabelByPackage.get(gesture.packageName) ?? gesture.packageName;
+    },
+    [appLabelByPackage],
+  );
+
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<SavedGesture>) => (
-      <GestureRow gesture={item} onReassign={handleReassign} onDelete={handleDelete} />
+      <GestureRow
+        gesture={item}
+        appLabel={getDisplayAppLabel(item)}
+        onReassign={handleReassign}
+        onDelete={handleDelete}
+      />
     ),
-    [handleReassign, handleDelete],
+    [getDisplayAppLabel, handleReassign, handleDelete],
   );
 
   const renderEmpty = useCallback(
@@ -241,54 +279,80 @@ const GestureManagementScreen: React.FC<GestureManagementScreenProps> = ({
   // -------------------------------------------------------------------------
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>Gesture Library</Text>
-        <TouchableOpacity onPress={onClose} activeOpacity={0.7} style={styles.closeButton}>
-          <Text style={styles.closeText}>✕</Text>
-        </TouchableOpacity>
-      </View>
+    <Modal visible animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      <View style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>Gesture Library</Text>
+          <TouchableOpacity onPress={onClose} activeOpacity={0.7} style={styles.closeButton}>
+            <Text style={styles.closeText}>✕</Text>
+          </TouchableOpacity>
+        </View>
 
-      {/* Settings row – trail effect toggle */}
-      <View style={styles.settingsRow}>
-        <Text style={styles.settingsLabel}>Trail effect</Text>
-        <Text style={styles.settingsHint}>(may slow old devices)</Text>
-        <Switch
-          value={trailEffect}
-          onValueChange={onToggleTrailEffect}
-          trackColor={{ false: '#333', true: '#00FFCC55' }}
-          thumbColor={trailEffect ? '#00FFCC' : '#888'}
-          accessibilityLabel="Toggle trail effect for gesture drawing"
+        {/* Settings row – trail effect toggle */}
+        <View style={styles.settingsRow}>
+          <Text style={styles.settingsLabel}>Trail effect</Text>
+          <Text style={styles.settingsHint}>(may slow old devices)</Text>
+          <Switch
+            value={trailEffect}
+            onValueChange={onToggleTrailEffect}
+            trackColor={{ false: '#333', true: '#00FFCC55' }}
+            thumbColor={trailEffect ? '#00FFCC' : '#888'}
+            accessibilityLabel="Toggle trail effect for gesture drawing"
+          />
+        </View>
+
+        <View style={styles.settingsRow}>
+          <Text style={styles.settingsLabel}>Open app after create</Text>
+          <Text style={styles.settingsHint}>(launch immediately after assignment)</Text>
+          <Switch
+            value={launchOnCreateShortcut}
+            onValueChange={onToggleLaunchOnCreateShortcut}
+            trackColor={{ false: '#333', true: '#00FFCC55' }}
+            thumbColor={launchOnCreateShortcut ? '#00FFCC' : '#888'}
+            accessibilityLabel="Toggle opening app after creating a shortcut"
+          />
+        </View>
+
+        <View style={styles.settingsRow}>
+          <Text style={styles.settingsLabel}>Match backwards gestures</Text>
+          <Text style={styles.settingsHint}>(treat reverse stroke direction as same)</Text>
+          <Switch
+            value={allowBackwardGestures}
+            onValueChange={onToggleAllowBackwardGestures}
+            trackColor={{ false: '#333', true: '#00FFCC55' }}
+            thumbColor={allowBackwardGestures ? '#00FFCC' : '#888'}
+            accessibilityLabel="Toggle matching gestures drawn in reverse direction"
+          />
+        </View>
+
+        {/* Clear All */}
+        <TouchableOpacity
+          onPress={handleClearAll}
+          activeOpacity={0.7}
+          style={styles.clearAllButton}
+        >
+          <Text style={styles.clearAllText}>Clear All</Text>
+        </TouchableOpacity>
+
+        {/* Gesture list */}
+        <FlatList
+          data={gestures}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          ListEmptyComponent={renderEmpty}
+          contentContainerStyle={gestures.length === 0 ? styles.listContentEmpty : styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
+
+        {/* Reassign modal */}
+        <AssignAppModal
+          visible={reassignTarget !== null}
+          onAssign={handleAssignApp}
+          onCancel={handleCancelAssign}
         />
       </View>
-
-      {/* Clear All */}
-      <TouchableOpacity
-        onPress={handleClearAll}
-        activeOpacity={0.7}
-        style={styles.clearAllButton}
-      >
-        <Text style={styles.clearAllText}>Clear All</Text>
-      </TouchableOpacity>
-
-      {/* Gesture list */}
-      <FlatList
-        data={gestures}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
-        ListEmptyComponent={renderEmpty}
-        contentContainerStyle={gestures.length === 0 ? styles.listContentEmpty : styles.listContent}
-        showsVerticalScrollIndicator={false}
-      />
-
-      {/* Reassign modal */}
-      <AssignAppModal
-        visible={reassignTarget !== null}
-        onAssign={handleAssignApp}
-        onCancel={handleCancelAssign}
-      />
-    </View>
+    </Modal>
   );
 };
 
