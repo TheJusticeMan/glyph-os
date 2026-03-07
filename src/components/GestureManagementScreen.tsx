@@ -40,6 +40,8 @@ interface GestureManagementScreenProps {
   onDeleteGesture: (label: string) => void;
   onClearAll: () => void;
   onClose: () => void;
+  onOpenWallpaperChooser: () => void;
+  onOpenHomeAppChooser: () => void;
   trailEffect: boolean;
   onToggleTrailEffect: () => void;
   launchOnCreateShortcut: boolean;
@@ -54,6 +56,7 @@ interface GestureManagementScreenProps {
 
 const PREVIEW_SIZE = 52;
 const PREVIEW_PADDING = 6;
+type ManagementTab = 'gestures' | 'settings';
 
 function buildPreviewPath(points: Point[]): string {
   if (points.length < 2) return '';
@@ -166,6 +169,8 @@ const GestureManagementScreen: React.FC<GestureManagementScreenProps> = ({
   onDeleteGesture,
   onClearAll,
   onClose,
+  onOpenWallpaperChooser,
+  onOpenHomeAppChooser,
   trailEffect,
   onToggleTrailEffect,
   launchOnCreateShortcut,
@@ -174,6 +179,7 @@ const GestureManagementScreen: React.FC<GestureManagementScreenProps> = ({
   onToggleAllowBackwardGestures,
 }) => {
   const [reassignTarget, setReassignTarget] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<ManagementTab>('gestures');
   const { apps } = useInstalledApps();
 
   // -------------------------------------------------------------------------
@@ -289,61 +295,99 @@ const GestureManagementScreen: React.FC<GestureManagementScreenProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* Settings row – trail effect toggle */}
-        <View style={styles.settingsRow}>
-          <Text style={styles.settingsLabel}>Trail effect</Text>
-          <Text style={styles.settingsHint}>(may slow old devices)</Text>
-          <Switch
-            value={trailEffect}
-            onValueChange={onToggleTrailEffect}
-            trackColor={{ false: '#333', true: '#00FFCC55' }}
-            thumbColor={trailEffect ? '#00FFCC' : '#888'}
-            accessibilityLabel="Toggle trail effect for gesture drawing"
-          />
+        <View style={styles.tabsRow}>
+          <TouchableOpacity
+            onPress={() => setActiveTab('gestures')}
+            activeOpacity={0.8}
+            style={[styles.tabButton, activeTab === 'gestures' && styles.tabButtonActive]}
+          >
+            <Text style={[styles.tabText, activeTab === 'gestures' && styles.tabTextActive]}>Gestures</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setActiveTab('settings')}
+            activeOpacity={0.8}
+            style={[styles.tabButton, activeTab === 'settings' && styles.tabButtonActive]}
+          >
+            <Text style={[styles.tabText, activeTab === 'settings' && styles.tabTextActive]}>Settings</Text>
+          </TouchableOpacity>
         </View>
 
-        <View style={styles.settingsRow}>
-          <Text style={styles.settingsLabel}>Open app after create</Text>
-          <Text style={styles.settingsHint}>(launch immediately after assignment)</Text>
-          <Switch
-            value={launchOnCreateShortcut}
-            onValueChange={onToggleLaunchOnCreateShortcut}
-            trackColor={{ false: '#333', true: '#00FFCC55' }}
-            thumbColor={launchOnCreateShortcut ? '#00FFCC' : '#888'}
-            accessibilityLabel="Toggle opening app after creating a shortcut"
-          />
-        </View>
+        {activeTab === 'settings' ? (
+          <View style={styles.settingsPanel}>
+            <View style={styles.settingsRow}>
+              <Text style={styles.settingsLabel}>Trail effect</Text>
+              <Text style={styles.settingsHint}>(may slow old devices)</Text>
+              <Switch
+                value={trailEffect}
+                onValueChange={onToggleTrailEffect}
+                trackColor={{ false: '#333', true: '#00FFCC55' }}
+                thumbColor={trailEffect ? '#00FFCC' : '#888'}
+                accessibilityLabel="Toggle trail effect for gesture drawing"
+              />
+            </View>
 
-        <View style={styles.settingsRow}>
-          <Text style={styles.settingsLabel}>Match backwards gestures</Text>
-          <Text style={styles.settingsHint}>(treat reverse stroke direction as same)</Text>
-          <Switch
-            value={allowBackwardGestures}
-            onValueChange={onToggleAllowBackwardGestures}
-            trackColor={{ false: '#333', true: '#00FFCC55' }}
-            thumbColor={allowBackwardGestures ? '#00FFCC' : '#888'}
-            accessibilityLabel="Toggle matching gestures drawn in reverse direction"
-          />
-        </View>
+            <View style={styles.settingsRow}>
+              <Text style={styles.settingsLabel}>Open app after create</Text>
+              <Text style={styles.settingsHint}>(launch immediately after assignment)</Text>
+              <Switch
+                value={launchOnCreateShortcut}
+                onValueChange={onToggleLaunchOnCreateShortcut}
+                trackColor={{ false: '#333', true: '#00FFCC55' }}
+                thumbColor={launchOnCreateShortcut ? '#00FFCC' : '#888'}
+                accessibilityLabel="Toggle opening app after creating a shortcut"
+              />
+            </View>
 
-        {/* Clear All */}
-        <TouchableOpacity
-          onPress={handleClearAll}
-          activeOpacity={0.7}
-          style={styles.clearAllButton}
-        >
-          <Text style={styles.clearAllText}>Clear All</Text>
-        </TouchableOpacity>
+            <View style={styles.settingsRow}>
+              <Text style={styles.settingsLabel}>Match backwards gestures</Text>
+              <Text style={styles.settingsHint}>(treat reverse stroke direction as same)</Text>
+              <Switch
+                value={allowBackwardGestures}
+                onValueChange={onToggleAllowBackwardGestures}
+                trackColor={{ false: '#333', true: '#00FFCC55' }}
+                thumbColor={allowBackwardGestures ? '#00FFCC' : '#888'}
+                accessibilityLabel="Toggle matching gestures drawn in reverse direction"
+              />
+            </View>
 
-        {/* Gesture list */}
-        <FlatList
-          data={gestures}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          ListEmptyComponent={renderEmpty}
-          contentContainerStyle={gestures.length === 0 ? styles.listContentEmpty : styles.listContent}
-          showsVerticalScrollIndicator={false}
-        />
+            <TouchableOpacity
+              onPress={onOpenWallpaperChooser}
+              activeOpacity={0.8}
+              style={styles.chooserButton}
+            >
+              <Text style={styles.chooserButtonText}>Open Wallpaper Chooser</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onOpenHomeAppChooser}
+              activeOpacity={0.8}
+              style={styles.chooserButton}
+            >
+              <Text style={styles.chooserButtonText}>Open Home App Chooser</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            {/* Clear All */}
+            <TouchableOpacity
+              onPress={handleClearAll}
+              activeOpacity={0.7}
+              style={styles.clearAllButton}
+            >
+              <Text style={styles.clearAllText}>Clear All</Text>
+            </TouchableOpacity>
+
+            {/* Gesture list */}
+            <FlatList
+              data={gestures}
+              keyExtractor={keyExtractor}
+              renderItem={renderItem}
+              ListEmptyComponent={renderEmpty}
+              contentContainerStyle={gestures.length === 0 ? styles.listContentEmpty : styles.listContent}
+              showsVerticalScrollIndicator={false}
+            />
+          </>
+        )}
 
         {/* Reassign modal */}
         <AssignAppModal
@@ -387,7 +431,39 @@ const styles = StyleSheet.create({
     color: '#00FFCC',
     fontWeight: '600',
   },
+  tabsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  tabButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#1f1f1f',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#101010',
+  },
+  tabButtonActive: {
+    borderColor: '#00FFCC',
+    backgroundColor: '#032a22',
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#777',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  tabTextActive: {
+    color: '#00FFCC',
+  },
   // Settings
+  settingsPanel: {
+    flex: 1,
+    paddingTop: 2,
+  },
   settingsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -404,6 +480,21 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 11,
     color: '#555',
+  },
+  chooserButton: {
+    borderWidth: 1,
+    borderColor: '#00FFCC',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 10,
+    backgroundColor: '#071a17',
+  },
+  chooserButtonText: {
+    color: '#00FFCC',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   // Clear All
   clearAllButton: {

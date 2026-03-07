@@ -10,7 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, StyleSheet } from 'react-native';
+import { BackHandler, Linking, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -106,7 +106,7 @@ export default function App() {
   // -------------------------------------------------------------------------
   // Backward-gesture setting – treat reverse draw direction as a match
   // -------------------------------------------------------------------------
-  const [allowBackwardGestures, setAllowBackwardGestures] = useState(false);
+  const [allowBackwardGestures, setAllowBackwardGestures] = useState(true);
 
   useEffect(() => {
     AsyncStorage.getItem(ALLOW_BACKWARD_GESTURES_KEY).then((value) => {
@@ -177,6 +177,29 @@ export default function App() {
       feedbackTimerRef.current = null;
     }, FEEDBACK_DURATION_MS);
   }, []);
+
+  const handleOpenWallpaperChooser = useCallback(async () => {
+    try {
+      await Linking.sendIntent('android.intent.action.SET_WALLPAPER');
+    } catch {
+      showFeedback('Could not open wallpaper chooser', 'error');
+    }
+  }, [showFeedback]);
+
+  const handleOpenHomeAppChooser = useCallback(async () => {
+    try {
+      await RNLauncherKitHelper.openSetDefaultLauncher();
+      return;
+    } catch {
+      // Fallback for devices/ROMs that block direct launcher chooser intents.
+    }
+
+    try {
+      await Linking.sendIntent('android.settings.HOME_SETTINGS');
+    } catch {
+      showFeedback('Could not open home app chooser', 'error');
+    }
+  }, [showFeedback]);
 
   // -------------------------------------------------------------------------
   // Assign-app modal flow
@@ -378,6 +401,8 @@ export default function App() {
             onDeleteGesture={handleDeleteGesture}
             onClearAll={handleClearAll}
             onClose={() => setShowManagement(false)}
+            onOpenWallpaperChooser={handleOpenWallpaperChooser}
+            onOpenHomeAppChooser={handleOpenHomeAppChooser}
             trailEffect={trailEffect}
             onToggleTrailEffect={handleToggleTrailEffect}
             launchOnCreateShortcut={launchOnCreateShortcut}
@@ -419,6 +444,6 @@ export default function App() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: 'transparent',
   },
 });

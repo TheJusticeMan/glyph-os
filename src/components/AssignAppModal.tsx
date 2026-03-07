@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
-  InteractionManager,
   ListRenderItemInfo,
   Modal,
   StyleSheet,
@@ -98,9 +97,21 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({
   const focusSearchInput = useCallback(() => {
     // Modal mount/animation timing differs by platform; schedule a couple of
     // focus attempts so the soft keyboard appears reliably after opening.
-    const interactionTask = InteractionManager.runAfterInteractions(() => {
+    const requestIdle = (globalThis as any).requestIdleCallback as
+      | ((callback: () => void) => number)
+      | undefined;
+    const cancelIdle = (globalThis as any).cancelIdleCallback as
+      | ((id: number) => void)
+      | undefined;
+
+    const idleId = requestIdle?.(() => {
       searchInputRef.current?.focus();
     });
+    const idleFallbackTimeoutId = idleId === undefined
+      ? setTimeout(() => {
+          searchInputRef.current?.focus();
+        }, 0)
+      : null;
 
     const frameId = requestAnimationFrame(() => {
       searchInputRef.current?.focus();
@@ -111,7 +122,12 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({
     }, 120);
 
     return () => {
-      interactionTask.cancel();
+      if (idleId !== undefined && cancelIdle) {
+        cancelIdle(idleId);
+      }
+      if (idleFallbackTimeoutId !== null) {
+        clearTimeout(idleFallbackTimeoutId);
+      }
       cancelAnimationFrame(frameId);
       clearTimeout(timeoutId);
     };

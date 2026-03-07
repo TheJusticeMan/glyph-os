@@ -6,34 +6,61 @@
  * adding the QUERY_ALL_PACKAGES permission to AndroidManifest.xml (needed
  * on Android 11+ to enumerate installed apps).
  */
-const { withAndroidManifest } = require('@expo/config-plugins');
+const {
+  withAndroidManifest,
+  withAndroidStyles,
+  AndroidConfig,
+} = require("@expo/config-plugins");
+
+const { assignStylesValue, getAppThemeGroup } = AndroidConfig.Styles;
 
 /**
  * @param {import('@expo/config-plugins').ExpoConfig} config
  * @returns {import('@expo/config-plugins').ExpoConfig}
  */
 function withLauncherKit(config) {
-  return withAndroidManifest(config, (mod) => {
+  config = withAndroidManifest(config, (mod) => {
     const androidManifest = mod.modResults;
     const mainManifest = androidManifest.manifest;
 
-    if (!mainManifest['uses-permission']) {
-      mainManifest['uses-permission'] = [];
+    if (!mainManifest["uses-permission"]) {
+      mainManifest["uses-permission"] = [];
     }
 
-    const PERMISSION = 'android.permission.QUERY_ALL_PACKAGES';
-    const alreadyAdded = mainManifest['uses-permission'].some(
-      (p) => p.$?.['android:name'] === PERMISSION,
+    const PERMISSION = "android.permission.QUERY_ALL_PACKAGES";
+    const alreadyAdded = mainManifest["uses-permission"].some(
+      (p) => p.$?.["android:name"] === PERMISSION,
     );
 
     if (!alreadyAdded) {
-      mainManifest['uses-permission'].push({
-        $: { 'android:name': PERMISSION },
+      mainManifest["uses-permission"].push({
+        $: { "android:name": PERMISSION },
       });
     }
 
     return mod;
   });
+
+  config = withAndroidStyles(config, (mod) => {
+    // Ensure launcher theme shows the user's wallpaper behind React Native.
+    mod.modResults = assignStylesValue(mod.modResults, {
+      add: true,
+      parent: getAppThemeGroup(),
+      name: "android:windowShowWallpaper",
+      value: "true",
+    });
+
+    mod.modResults = assignStylesValue(mod.modResults, {
+      add: true,
+      parent: getAppThemeGroup(),
+      name: "android:windowBackground",
+      value: "@android:color/transparent",
+    });
+
+    return mod;
+  });
+
+  return config;
 }
 
 module.exports = withLauncherKit;
