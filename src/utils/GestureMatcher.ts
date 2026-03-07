@@ -1,15 +1,18 @@
 /**
  * GestureMatcher.ts
  *
- * Takes 40 normalized points, builds a turning-angle (bend) signature, and
- * compares it against a list of saved gestures using both Euclidean distance
- * and Cosine Similarity so callers can choose the metric that suits them.
+ * Matches a 40-point normalized gesture path against saved gestures using the
+ * segment-angle / directional-difference algorithm ported from the Obsidian
+ * Mobile Plugin reference implementation (gesture-handler.ts).
+ *
+ * Algorithm overview:
+ *  1. For each corresponding segment pair, compute the direction angle with
+ *     Math.atan2 and take the absolute wrapped angular difference.
+ *  2. Average the differences across all segments → `calculateDifference`.
+ *  3. Accept the best match when its score is below ANGULAR_THRESHOLD (0.5 rad).
  */
 
-import { Point, NUM_POINTS } from './GestureNormalizer';
-
-/** The number of turning angles derived from NUM_POINTS points is NUM_POINTS - 2. */
-const SIGNATURE_LENGTH = NUM_POINTS - 2;
+import { Point } from './GestureNormalizer';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,130 +23,258 @@ export interface SavedGesture {
   label: string;
   /** Optional Android package name to launch when this gesture is recognised. */
   packageName?: string;
-  /** The turning-angle signature (length === SIGNATURE_LENGTH). */
-  signature: number[];
+  /** The normalized 40-point gesture path used for angular-difference matching. */
+  normalizedPath: Point[];
 }
-
-// ---------------------------------------------------------------------------
-// Signature computation
-// ---------------------------------------------------------------------------
-
-/**
- * Returns the signed turning angle (in radians) at point B of the triplet A→B→C.
- * Positive = left turn, Negative = right turn.
- */
-function turningAngle(a: Point, b: Point, c: Point): number {
-  const v1x = b.x - a.x;
-  const v1y = b.y - a.y;
-  const v2x = c.x - b.x;
-  const v2y = c.y - b.y;
-
-  const dot = v1x * v2x + v1y * v2y;
-  const cross = v1x * v2y - v1y * v2x;
-
-  return Math.atan2(cross, dot);
-}
-
-/**
- * Builds the turning-angle signature from 40 normalised points.
- * Returns an array of `SIGNATURE_LENGTH` (38) angles in radians.
- */
-export function buildSignature(points: Point[]): number[] {
-  if (points.length !== NUM_POINTS) {
-    throw new Error(
-      `buildSignature expects exactly ${NUM_POINTS} points, got ${points.length}`
-    );
-  }
-
-  const angles: number[] = [];
-  for (let i = 0; i < points.length - 2; i++) {
-    angles.push(turningAngle(points[i], points[i + 1], points[i + 2]));
-  }
-  return angles;
-}
-
-// ---------------------------------------------------------------------------
-// Similarity metrics
-// ---------------------------------------------------------------------------
-
-/**
- * Euclidean distance between two equal-length vectors.
- * Lower is more similar.
- */
-export function euclideanDistance(a: number[], b: number[]): number {
-  let sum = 0;
-  for (let i = 0; i < a.length; i++) {
-    const diff = a[i] - b[i];
-    sum += diff * diff;
-  }
-  return Math.sqrt(sum);
-}
-
-/**
- * Cosine similarity between two equal-length vectors.
- * Range [-1, 1]; 1 means identical direction.
- */
-export function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  // Both vectors are zero-magnitude – they are identical (e.g. a perfectly straight line)
-  if (normA === 0 && normB === 0) return 1;
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denom === 0) return 0;
-  return dot / denom;
-}
-
-// ---------------------------------------------------------------------------
-// Matching
-// ---------------------------------------------------------------------------
-
-/** Maximum Euclidean distance that is still considered a match. */
-export const EUCLIDEAN_THRESHOLD = 3.0;
-
-/** Minimum Cosine Similarity that is still considered a match. */
-export const COSINE_THRESHOLD = 0.92;
 
 export interface MatchResult {
   gesture: SavedGesture;
-  euclideanDistance: number;
-  cosineSimilarity: number;
+  /** Average angular difference (radians) between corresponding segments. Lower is better. */
+  angularDifference: number;
+}
+
+export interface SimilarAppMatch {
+  packageName: string;
+  angularDifference: number;
+}
+
+export interface BlendBoundsResult {
+  canMerge: boolean;
+  minT: number;
+  maxT: number;
+}
+
+export interface MatchGestureOptions {
+  allowBackward?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Angular-difference matching (ported from gesture-handler.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum average angular difference (in radians) that is still considered a
+ * match.  Mirrors the `minDiff < 0.5` threshold in the reference implementation.
+ */
+export const ANGULAR_THRESHOLD = 0.5;
+
+/**
+ * Computes the average angular difference between corresponding segments of two
+ * normalized paths.  Each segment's direction is compared using atan2; the
+ * absolute angular difference is wrapped to [0, π] and averaged across all
+ * N-1 segments.
+ *
+ * Lower return values indicate more similar gestures; returns Infinity when
+ * either path has fewer than 2 points.
+ */
+export function calculateDifference(line1: Point[], line2: Point[]): number {
+  const n = Math.min(line1.length, line2.length);
+  if (n < 2) return Infinity;
+
+  let totalDiff = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const v1x = line1[i + 1].x - line1[i].x;
+    const v1y = line1[i + 1].y - line1[i].y;
+    const v2x = line2[i + 1].x - line2[i].x;
+    const v2y = line2[i + 1].y - line2[i].y;
+
+    const angle1 = Math.atan2(v1y, v1x);
+    const angle2 = Math.atan2(v2y, v2x);
+
+    let diff = Math.abs(angle1 - angle2);
+    if (diff > Math.PI) {
+      diff = 2 * Math.PI - diff;
+    }
+    totalDiff += diff;
+  }
+  return totalDiff / (n - 1);
+}
+
+/** Returns the smaller score between forward and optional reversed-reference matching. */
+export function calculateBestDirectionDifference(
+  candidate: Point[],
+  reference: Point[],
+  allowBackward: boolean,
+): number {
+  const forward = calculateDifference(candidate, reference);
+  if (!allowBackward) return forward;
+  const reversed = calculateDifference(candidate, [...reference].reverse());
+  return Math.min(forward, reversed);
 }
 
 /**
  * Finds the closest saved gesture for the given 40-point normalised input.
  *
- * Uses both Euclidean distance and Cosine Similarity; a match is accepted only
- * when **both** thresholds are satisfied.  Returns `null` if no gesture is
- * close enough or the list is empty.
+ * Compares the input path against each saved gesture's `normalizedPath` using
+ * average angular difference.  Returns the best match if its score is below
+ * ANGULAR_THRESHOLD, otherwise null.  Gestures without a valid `normalizedPath`
+ * are skipped.
  */
 export function matchGesture(
   normalizedPoints: Point[],
-  savedGestures: SavedGesture[]
+  savedGestures: SavedGesture[],
+  options?: MatchGestureOptions,
 ): MatchResult | null {
   if (savedGestures.length === 0) return null;
 
-  const inputSig = buildSignature(normalizedPoints);
+  const allowBackward = options?.allowBackward ?? false;
 
   let best: MatchResult | null = null;
-  let bestEuclidean = Infinity;
+  let minDiff = Infinity;
 
   for (const gesture of savedGestures) {
-    if (gesture.signature.length !== SIGNATURE_LENGTH) continue;
+    if (!gesture.normalizedPath || gesture.normalizedPath.length < 2) continue;
 
-    const ed = euclideanDistance(inputSig, gesture.signature);
-    const cs = cosineSimilarity(inputSig, gesture.signature);
-
-    if (ed < bestEuclidean && ed <= EUCLIDEAN_THRESHOLD && cs >= COSINE_THRESHOLD) {
-      bestEuclidean = ed;
-      best = { gesture, euclideanDistance: ed, cosineSimilarity: cs };
+    const diff = calculateBestDirectionDifference(
+      normalizedPoints,
+      gesture.normalizedPath,
+      allowBackward,
+    );
+    if (diff < minDiff) {
+      minDiff = diff;
+      best = { gesture, angularDifference: diff };
     }
   }
 
-  return best;
+  if (best && minDiff < ANGULAR_THRESHOLD) {
+    return best;
+  }
+  return null;
+}
+
+/**
+ * Returns the most similar apps (best angular score per package) for a
+ * candidate gesture. The ranking is global over all saved app-bound gestures.
+ */
+export function rankSimilarApps(
+  normalizedPoints: Point[],
+  savedGestures: SavedGesture[],
+  limit = 5,
+  options?: MatchGestureOptions,
+): SimilarAppMatch[] {
+  const allowBackward = options?.allowBackward ?? false;
+  const byPackage = new Map<string, number>();
+
+  for (const gesture of savedGestures) {
+    if (!gesture.packageName) continue;
+    if (!gesture.normalizedPath || gesture.normalizedPath.length < 2) continue;
+
+    const diff = calculateBestDirectionDifference(
+      normalizedPoints,
+      gesture.normalizedPath,
+      allowBackward,
+    );
+    const current = byPackage.get(gesture.packageName);
+    if (current === undefined || diff < current) {
+      byPackage.set(gesture.packageName, diff);
+    }
+  }
+
+  return Array.from(byPackage.entries())
+    .map(([packageName, angularDifference]) => ({ packageName, angularDifference }))
+    .sort((a, b) => {
+      if (a.angularDifference !== b.angularDifference) {
+        return a.angularDifference - b.angularDifference;
+      }
+      return a.packageName.localeCompare(b.packageName);
+    })
+    .slice(0, Math.max(0, limit));
+}
+
+/**
+ * Blends two normalized paths with interpolation factor `t` in [0, 1].
+ * t=0 returns lineA, t=1 returns lineB.
+ */
+export function blendNormalizedPaths(lineA: Point[], lineB: Point[], t: number): Point[] {
+  const n = Math.min(lineA.length, lineB.length);
+  if (n < 2) return [];
+  const clamped = Math.max(0, Math.min(1, t));
+
+  const blended: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    blended.push({
+      x: lineA[i].x * (1 - clamped) + lineB[i].x * clamped,
+      y: lineA[i].y * (1 - clamped) + lineB[i].y * clamped,
+    });
+  }
+  return blended;
+}
+
+/**
+ * True when `candidate` is within the configured angular threshold of
+ * `reference`.
+ */
+export function isWithinThreshold(
+  candidate: Point[],
+  reference: Point[],
+  threshold = ANGULAR_THRESHOLD,
+): boolean {
+  return calculateDifference(candidate, reference) < threshold;
+}
+
+/**
+ * Uses trial steps plus binary refinement to find the widest contiguous interval
+ * around t=0.5 where a blended path is still detectable as both source paths.
+ */
+export function findBlendBoundsForDualMatch(
+  oldPath: Point[],
+  newPath: Point[],
+): BlendBoundsResult {
+  const midpoint = blendNormalizedPaths(oldPath, newPath, 0.5);
+  const matchesBoth = (candidate: Point[]): boolean =>
+    isWithinThreshold(candidate, oldPath) && isWithinThreshold(candidate, newPath);
+
+  if (midpoint.length < 2 || !matchesBoth(midpoint)) {
+    return { canMerge: false, minT: 0.5, maxT: 0.5 };
+  }
+
+  const matchesAt = (t: number): boolean => matchesBoth(blendNormalizedPaths(oldPath, newPath, t));
+  const step = 0.05;
+  const iterations = 18;
+
+  let left = 0.5;
+  while (left - step >= 0 && matchesAt(left - step)) {
+    left -= step;
+  }
+
+  let right = 0.5;
+  while (right + step <= 1 && matchesAt(right + step)) {
+    right += step;
+  }
+
+  let minT = left;
+  if (left > 0 && !matchesAt(0)) {
+    let lo = Math.max(0, left - step);
+    let hi = left;
+    for (let i = 0; i < iterations; i++) {
+      const mid = (lo + hi) / 2;
+      if (matchesAt(mid)) {
+        hi = mid;
+      } else {
+        lo = mid;
+      }
+    }
+    minT = hi;
+  } else if (matchesAt(0)) {
+    minT = 0;
+  }
+
+  let maxT = right;
+  if (right < 1 && !matchesAt(1)) {
+    let lo = right;
+    let hi = Math.min(1, right + step);
+    for (let i = 0; i < iterations; i++) {
+      const mid = (lo + hi) / 2;
+      if (matchesAt(mid)) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    maxT = lo;
+  } else if (matchesAt(1)) {
+    maxT = 1;
+  }
+
+  return { canMerge: true, minT, maxT };
 }

@@ -12,6 +12,7 @@ import {
   STORAGE_SCHEMA_VERSION,
 } from '../utils/GestureStorage';
 import { SavedGesture } from '../utils/GestureMatcher';
+import { NUM_POINTS, Point } from '../utils/GestureNormalizer';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
@@ -19,9 +20,17 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 
 const STORAGE_KEY = 'glyph_os_gestures';
 
+/** Generates a minimal valid 40-point horizontal path. */
+function makePath(length = 100): Point[] {
+  return Array.from({ length: NUM_POINTS }, (_, i) => ({
+    x: (i / (NUM_POINTS - 1)) * length,
+    y: 0,
+  }));
+}
+
 const sampleGestures: SavedGesture[] = [
-  { label: 'swipe-right', packageName: 'com.example.app', signature: [0.1, 0.2, 0.3] },
-  { label: 'circle', signature: [1.0, -1.0, 0.5] },
+  { label: 'swipe-right', packageName: 'com.example.app', normalizedPath: makePath(100) },
+  { label: 'circle', normalizedPath: makePath(50) },
 ];
 
 // ---------------------------------------------------------------------------
@@ -68,9 +77,10 @@ describe('loadGestures', () => {
   it('filters out invalid entries from a stored array', async () => {
     const mixed = [
       sampleGestures[0],
-      { label: 123, signature: [] },   // invalid label type
-      { signature: [0.1] },            // missing label
-      { label: 'ok', signature: ['x'] }, // non-number in signature
+      { label: 123, normalizedPath: [{ x: 0, y: 0 }, { x: 1, y: 1 }] },  // invalid label type
+      { normalizedPath: [{ x: 0, y: 0 }, { x: 1, y: 1 }] },               // missing label
+      { label: 'old-style', signature: [0.1, 0.2] },                       // legacy signature only
+      { label: 'short-path', normalizedPath: [{ x: 0, y: 0 }] },          // path too short
     ];
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(mixed));
 

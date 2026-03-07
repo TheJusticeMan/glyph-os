@@ -16,8 +16,13 @@ import { SavedGesture } from './GestureMatcher';
 /** AsyncStorage key under which all gesture data is stored. */
 const STORAGE_KEY = 'glyph_os_gestures';
 
-/** Current schema version.  Bump this when the stored shape changes. */
-export const STORAGE_SCHEMA_VERSION = 1;
+/**
+ * Current schema version. Bump this when the stored shape changes.
+ * v2: SavedGesture.normalizedPath (Point[]) replaces signature (number[]) as the
+ *     canonical field. Legacy v1 entries without normalizedPath are filtered out
+ *     on load rather than crashing the app.
+ */
+export const STORAGE_SCHEMA_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -36,10 +41,14 @@ interface GestureStore {
 function isValidGesture(item: unknown): item is SavedGesture {
   if (typeof item !== 'object' || item === null) return false;
   const g = item as Record<string, unknown>;
-  return (
-    typeof g.label === 'string' &&
-    Array.isArray(g.signature) &&
-    (g.signature as unknown[]).every((n) => typeof n === 'number')
+  if (typeof g.label !== 'string') return false;
+  if (!Array.isArray(g.normalizedPath) || g.normalizedPath.length < 2) return false;
+  return (g.normalizedPath as unknown[]).every(
+    (p) =>
+      typeof p === 'object' &&
+      p !== null &&
+      typeof (p as Record<string, unknown>).x === 'number' &&
+      typeof (p as Record<string, unknown>).y === 'number'
   );
 }
 

@@ -6,11 +6,12 @@
  * via the `onAssign` callback.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Image,
+  InteractionManager,
   ListRenderItemInfo,
   Modal,
   StyleSheet,
@@ -21,7 +22,7 @@ import {
 } from 'react-native';
 
 import type { AppDetail } from '../services/InstalledAppsService';
-import { filterApps } from '../services/InstalledAppsService';
+import { filterApps, getIconUri } from '../services/InstalledAppsService';
 import useInstalledApps from '../hooks/useInstalledApps';
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ interface AssignAppModalProps {
   visible: boolean;
   onAssign: (app: AppDetail) => void;
   onCancel: () => void;
+  prioritizedPackageNames?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -45,14 +47,17 @@ interface AppRowProps {
 
 const AppRow: React.FC<AppRowProps> = React.memo(({ app, onPress }) => {
   const handlePress = useCallback(() => onPress(app), [app, onPress]);
+  const [iconFailed, setIconFailed] = useState(false);
+  const iconUri = getIconUri(app.icon);
 
   return (
     <TouchableOpacity style={styles.row} onPress={handlePress} activeOpacity={0.7}>
-      {app.icon ? (
+      {iconUri && !iconFailed ? (
         <Image
-          source={{ uri: `data:image/png;base64,${app.icon}` }}
+          source={{ uri: iconUri }}
           style={styles.icon}
           resizeMode="contain"
+          onError={() => setIconFailed(true)}
         />
       ) : (
         <View style={styles.iconPlaceholder} />
@@ -73,8 +78,14 @@ const AppRow: React.FC<AppRowProps> = React.memo(({ app, onPress }) => {
 // Component
 // ---------------------------------------------------------------------------
 
-const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCancel }) => {
+const AssignAppModal: React.FC<AssignAppModalProps> = ({
+  visible,
+  onAssign,
+  onCancel,
+  prioritizedPackageNames = [],
+}) => {
   const [query, setQuery] = useState<string>('');
+  const searchInputRef = useRef<TextInput | null>(null);
   const { apps, loading, error, refresh } = useInstalledApps();
 
   // Reset search query each time the modal opens.
@@ -84,7 +95,52 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCa
     }
   }, [visible]);
 
-  const filteredApps = useMemo(() => filterApps(apps, query), [apps, query]);
+  const focusSearchInput = useCallback(() => {
+    // Modal mount/animation timing differs by platform; schedule a couple of
+    // focus attempts so the soft keyboard appears reliably after opening.
+    const interactionTask = InteractionManager.runAfterInteractions(() => {
+      searchInputRef.current?.focus();
+    });
+
+    const frameId = requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+
+    const timeoutId = setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 120);
+
+    return () => {
+      interactionTask.cancel();
+      cancelAnimationFrame(frameId);
+      clearTimeout(timeoutId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    return focusSearchInput();
+  }, [visible, focusSearchInput]);
+
+  const priorityOrder = useMemo(() => {
+    const map = new Map<string, number>();
+    prioritizedPackageNames.forEach((name, index) => {
+      map.set(name, index);
+    });
+    return map;
+  }, [prioritizedPackageNames]);
+
+  const filteredApps = useMemo(() => {
+    const base = filterApps(apps, query);
+    return [...base].sort((a, b) => {
+      const rankA = priorityOrder.get(a.packageName) ?? Number.POSITIVE_INFINITY;
+      const rankB = priorityOrder.get(b.packageName) ?? Number.POSITIVE_INFINITY;
+      if (rankA !== rankB) {
+        return rankA - rankB;
+      }
+      return 0;
+    });
+  }, [apps, query, priorityOrder]);
 
   const handleAssign = useCallback(
     (app: AppDetail) => {
@@ -132,6 +188,7 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCa
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
+        keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       />
@@ -147,12 +204,14 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCa
       visible={visible}
       animationType="slide"
       onRequestClose={onCancel}
+      onShow={focusSearchInput}
       statusBarTranslucent
     >
       <View style={styles.container}>
         <Text style={styles.title}>Assign App to Gesture</Text>
 
         <TextInput
+          ref={searchInputRef}
           style={styles.searchBar}
           placeholder="Search apps…"
           placeholderTextColor="#555"
@@ -161,7 +220,12 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({ visible, onAssign, onCa
           autoCorrect={false}
           autoCapitalize="none"
           returnKeyType="search"
+          autoFocus
         />
+
+        {query.trim() === '' && prioritizedPackageNames.length > 0 && (
+          <Text style={styles.hintText}>Top 5 similar apps are pinned first</Text>
+        )}
 
         {renderContent()}
 
@@ -201,6 +265,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     marginBottom: 12,
+  },
+  hintText: {
+    color: '#6F6F6F',
+    fontSize: 12,
+    marginBottom: 8,
   },
   listContent: {
     paddingBottom: 8,

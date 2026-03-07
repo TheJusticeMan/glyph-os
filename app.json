@@ -24,6 +24,10 @@
         {
           "action": "MAIN",
           "category": ["HOME", "DEFAULT"]
+        },
+        {
+          "action": "MAIN",
+          "category": ["LAUNCHER"]
         }
       ]
     },
