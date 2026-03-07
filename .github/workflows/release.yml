@@ -59,6 +59,18 @@ jobs:
             echo "profile=production" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate EAS project configuration
+        run: |
+          PROJECT_ID=$(node -e "const fs=require('fs');const app=JSON.parse(fs.readFileSync('app.json','utf8'));console.log(app?.expo?.extra?.eas?.projectId ?? '')")
+
+          if [ -z "$PROJECT_ID" ]; then
+            echo "Missing expo.extra.eas.projectId in app.json."
+            echo "Run 'eas init' locally and commit app.json before running release workflow."
+            exit 1
+          fi
+
+          echo "Using EAS project ID from app.json: $PROJECT_ID"
+
       - name: Build with EAS
         id: eas-build
         run: |

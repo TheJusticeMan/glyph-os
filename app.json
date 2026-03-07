@@ -23,11 +23,16 @@
       "intentFilters": [
         {
           "action": "MAIN",
-          "category": ["HOME", "DEFAULT"]
+          "category": [
+            "HOME",
+            "DEFAULT"
+          ]
         },
         {
           "action": "MAIN",
-          "category": ["LAUNCHER"]
+          "category": [
+            "LAUNCHER"
+          ]
         }
       ]
     },
@@ -36,6 +41,12 @@
     ],
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "134c2fe6-437b-4f9e-8d86-e7f4eaa5d2b9"
+      }
+    },
+    "owner": "justice_vellacott"
   }
 }
