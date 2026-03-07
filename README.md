@@ -42,8 +42,56 @@ npm start          # Start Expo dev server only
 ### Tests
 
 ```bash
-npx jest --no-coverage
+npm run test:ci    # Run all tests (CI-friendly, no watch mode)
+npm run typecheck  # TypeScript type-check without emitting files
 ```
+
+## EAS Build & Releases
+
+GlyphOS uses [Expo Application Services (EAS)](https://expo.dev/eas) for cloud builds and releases.
+
+### Install EAS CLI
+
+```bash
+npm install -g eas-cli
+```
+
+### Configure EXPO_TOKEN
+
+Generate a personal access token at **https://expo.dev/accounts/[your-account]/settings/access-tokens** (replace `[your-account]` with your Expo username) and store it as a repository secret named `EXPO_TOKEN` in **Settings → Secrets and variables → Actions** on GitHub.
+
+### Build Locally with EAS
+
+```bash
+# Log in to your Expo account first
+eas login
+
+# Development build (APK with dev client)
+eas build --platform android --profile development
+
+# Preview build (APK for sideloading/testing)
+eas build --platform android --profile preview
+
+# Production build (AAB for Play Store submission)
+eas build --platform android --profile production
+```
+
+EAS builds run in Expo's cloud infrastructure — no local Android SDK required. The CLI will print a build URL when the job is queued; the finished artifact can be downloaded from the Expo dashboard or via:
+
+```bash
+eas build:list
+```
+
+### Trigger a Release via Git Tag
+
+Pushing a tag matching `v*.*.*` automatically starts the GitHub Actions release workflow which builds the production AAB and creates a GitHub Release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+You can also trigger the workflow manually from the **Actions** tab using `workflow_dispatch` and selecting the desired build profile.
 
 ## How to Set as Default Launcher (Android)
 
