@@ -1,15 +1,18 @@
 /**
  * GestureMatcher.ts
  *
- * Takes 40 normalized points, builds a turning-angle (bend) signature, and
- * compares it against a list of saved gestures using both Euclidean distance
- * and Cosine Similarity so callers can choose the metric that suits them.
+ * Matches a 40-point normalized gesture path against saved gestures using the
+ * segment-angle / directional-difference algorithm ported from the Obsidian
+ * Mobile Plugin reference implementation (gesture-handler.ts).
+ *
+ * Algorithm overview:
+ *  1. For each corresponding segment pair, compute the direction angle with
+ *     Math.atan2 and take the absolute wrapped angular difference.
+ *  2. Average the differences across all segments → `calculateDifference`.
+ *  3. Accept the best match when its score is below ANGULAR_THRESHOLD (0.5 rad).
  */
 
 import { Point, NUM_POINTS } from './GestureNormalizer';
-
-/** The number of turning angles derived from NUM_POINTS points is NUM_POINTS - 2. */
-const SIGNATURE_LENGTH = NUM_POINTS - 2;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,13 +23,108 @@ export interface SavedGesture {
   label: string;
   /** Optional Android package name to launch when this gesture is recognised. */
   packageName?: string;
-  /** The turning-angle signature (length === SIGNATURE_LENGTH). */
-  signature: number[];
+  /** The normalized 40-point gesture path used for angular-difference matching. */
+  normalizedPath: Point[];
+  /**
+   * @deprecated Legacy turning-angle signature kept for backward-compatibility
+   * when loading old persisted data; not used for matching.
+   */
+  signature?: number[];
+}
+
+export interface MatchResult {
+  gesture: SavedGesture;
+  /** Average angular difference (radians) between corresponding segments. Lower is better. */
+  angularDifference: number;
 }
 
 // ---------------------------------------------------------------------------
-// Signature computation
+// Angular-difference matching (ported from gesture-handler.ts)
 // ---------------------------------------------------------------------------
+
+/**
+ * Maximum average angular difference (in radians) that is still considered a
+ * match.  Mirrors the `minDiff < 0.5` threshold in the reference implementation.
+ */
+export const ANGULAR_THRESHOLD = 0.5;
+
+/**
+ * Computes the average angular difference between corresponding segments of two
+ * normalized paths.  Each segment's direction is compared using atan2; the
+ * absolute angular difference is wrapped to [0, π] and averaged across all
+ * N-1 segments.
+ *
+ * Lower return values indicate more similar gestures; returns Infinity when
+ * either path has fewer than 2 points.
+ */
+export function calculateDifference(line1: Point[], line2: Point[]): number {
+  const n = Math.min(line1.length, line2.length);
+  if (n < 2) return Infinity;
+
+  let totalDiff = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const v1x = line1[i + 1].x - line1[i].x;
+    const v1y = line1[i + 1].y - line1[i].y;
+    const v2x = line2[i + 1].x - line2[i].x;
+    const v2y = line2[i + 1].y - line2[i].y;
+
+    const angle1 = Math.atan2(v1y, v1x);
+    const angle2 = Math.atan2(v2y, v2x);
+
+    let diff = Math.abs(angle1 - angle2);
+    if (diff > Math.PI) {
+      diff = 2 * Math.PI - diff;
+    }
+    totalDiff += diff;
+  }
+  return totalDiff / (n - 1);
+}
+
+/**
+ * Finds the closest saved gesture for the given 40-point normalised input.
+ *
+ * Compares the input path against each saved gesture's `normalizedPath` using
+ * average angular difference.  Returns the best match if its score is below
+ * ANGULAR_THRESHOLD, otherwise null.  Gestures without a valid `normalizedPath`
+ * are skipped (backward-compatibility with legacy signature-only entries).
+ */
+export function matchGesture(
+  normalizedPoints: Point[],
+  savedGestures: SavedGesture[]
+): MatchResult | null {
+  if (savedGestures.length === 0) return null;
+
+  let best: MatchResult | null = null;
+  let minDiff = Infinity;
+
+  for (const gesture of savedGestures) {
+    if (!gesture.normalizedPath || gesture.normalizedPath.length < 2) continue;
+
+    const diff = calculateDifference(normalizedPoints, gesture.normalizedPath);
+    if (diff < minDiff) {
+      minDiff = diff;
+      best = { gesture, angularDifference: diff };
+    }
+  }
+
+  if (best && minDiff < ANGULAR_THRESHOLD) {
+    return best;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy / utility functions retained for backward-compatibility
+// ---------------------------------------------------------------------------
+
+/** The number of turning angles derived from NUM_POINTS points is NUM_POINTS - 2. */
+export const SIGNATURE_LENGTH = NUM_POINTS - 2;
+
+/** @deprecated Use ANGULAR_THRESHOLD / calculateDifference with normalizedPath instead. */
+export const EUCLIDEAN_THRESHOLD = 3.0;
+
+/** @deprecated Use ANGULAR_THRESHOLD / calculateDifference with normalizedPath instead. */
+export const COSINE_THRESHOLD = 0.92;
 
 /**
  * Returns the signed turning angle (in radians) at point B of the triplet A→B→C.
@@ -47,6 +145,7 @@ function turningAngle(a: Point, b: Point, c: Point): number {
 /**
  * Builds the turning-angle signature from 40 normalised points.
  * Returns an array of `SIGNATURE_LENGTH` (38) angles in radians.
+ * @deprecated New gestures use normalizedPath with calculateDifference.
  */
 export function buildSignature(points: Point[]): number[] {
   if (points.length !== NUM_POINTS) {
@@ -62,13 +161,9 @@ export function buildSignature(points: Point[]): number[] {
   return angles;
 }
 
-// ---------------------------------------------------------------------------
-// Similarity metrics
-// ---------------------------------------------------------------------------
-
 /**
  * Euclidean distance between two equal-length vectors.
- * Lower is more similar.
+ * @deprecated New gestures use calculateDifference on normalizedPath.
  */
 export function euclideanDistance(a: number[], b: number[]): number {
   let sum = 0;
@@ -82,6 +177,7 @@ export function euclideanDistance(a: number[], b: number[]): number {
 /**
  * Cosine similarity between two equal-length vectors.
  * Range [-1, 1]; 1 means identical direction.
+ * @deprecated New gestures use calculateDifference on normalizedPath.
  */
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
@@ -97,53 +193,4 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   const denom = Math.sqrt(normA) * Math.sqrt(normB);
   if (denom === 0) return 0;
   return dot / denom;
-}
-
-// ---------------------------------------------------------------------------
-// Matching
-// ---------------------------------------------------------------------------
-
-/** Maximum Euclidean distance that is still considered a match. */
-export const EUCLIDEAN_THRESHOLD = 3.0;
-
-/** Minimum Cosine Similarity that is still considered a match. */
-export const COSINE_THRESHOLD = 0.92;
-
-export interface MatchResult {
-  gesture: SavedGesture;
-  euclideanDistance: number;
-  cosineSimilarity: number;
-}
-
-/**
- * Finds the closest saved gesture for the given 40-point normalised input.
- *
- * Uses both Euclidean distance and Cosine Similarity; a match is accepted only
- * when **both** thresholds are satisfied.  Returns `null` if no gesture is
- * close enough or the list is empty.
- */
-export function matchGesture(
-  normalizedPoints: Point[],
-  savedGestures: SavedGesture[]
-): MatchResult | null {
-  if (savedGestures.length === 0) return null;
-
-  const inputSig = buildSignature(normalizedPoints);
-
-  let best: MatchResult | null = null;
-  let bestEuclidean = Infinity;
-
-  for (const gesture of savedGestures) {
-    if (gesture.signature.length !== SIGNATURE_LENGTH) continue;
-
-    const ed = euclideanDistance(inputSig, gesture.signature);
-    const cs = cosineSimilarity(inputSig, gesture.signature);
-
-    if (ed < bestEuclidean && ed <= EUCLIDEAN_THRESHOLD && cs >= COSINE_THRESHOLD) {
-      bestEuclidean = ed;
-      best = { gesture, euclideanDistance: ed, cosineSimilarity: cs };
-    }
-  }
-
-  return best;
 }

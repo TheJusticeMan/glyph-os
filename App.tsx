@@ -23,6 +23,7 @@ import FeedbackOverlay, { FeedbackType } from './src/components/FeedbackOverlay'
 import { SavedGesture } from './src/utils/GestureMatcher';
 import { loadGestures, saveGestures, clearGestures } from './src/utils/GestureStorage';
 import { AppDetail } from './src/services/InstalledAppsService';
+import { Point } from './src/utils/GestureNormalizer';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -112,11 +113,11 @@ export default function App() {
   // -------------------------------------------------------------------------
   const [pendingGesture, setPendingGesture] = useState<{
     label: string;
-    signature: number[];
+    normalizedPath: Point[];
   } | null>(null);
 
-  const handleRequestAssignApp = useCallback((label: string, signature: number[]) => {
-    setPendingGesture({ label, signature });
+  const handleRequestAssignApp = useCallback((label: string, normalizedPath: Point[]) => {
+    setPendingGesture({ label, normalizedPath });
   }, []);
 
   const handleAssignApp = useCallback(
@@ -127,7 +128,7 @@ export default function App() {
         {
           label: pendingGesture.label,
           packageName: app.packageName,
-          signature: pendingGesture.signature,
+          normalizedPath: pendingGesture.normalizedPath,
         },
       ]);
       showFeedback('App assigned!', 'saved');

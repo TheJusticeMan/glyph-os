@@ -1,18 +1,22 @@
 /**
  * GestureMatcher.test.ts
  *
- * Unit tests for buildSignature, euclideanDistance, cosineSimilarity, and
- * matchGesture.
+ * Unit tests for the gesture matching algorithm:
+ *  - calculateDifference (new angular-difference matcher)
+ *  - matchGesture (now uses calculateDifference with normalizedPath)
+ *  - Legacy utilities: buildSignature, euclideanDistance, cosineSimilarity
  */
 
 import {
   buildSignature,
   euclideanDistance,
   cosineSimilarity,
+  calculateDifference,
   matchGesture,
   SavedGesture,
   EUCLIDEAN_THRESHOLD,
   COSINE_THRESHOLD,
+  ANGULAR_THRESHOLD,
 } from '../utils/GestureMatcher';
 import { normalizeTo40Points, NUM_POINTS, Point } from '../utils/GestureNormalizer';
 
@@ -36,7 +40,52 @@ function straightLinePoints(length = 100): Point[] {
 }
 
 // ---------------------------------------------------------------------------
-// buildSignature
+// calculateDifference
+// ---------------------------------------------------------------------------
+
+describe('calculateDifference', () => {
+  it('returns 0 for identical paths', () => {
+    const path = straightLinePoints();
+    expect(calculateDifference(path, path)).toBeCloseTo(0, 10);
+  });
+
+  it('returns Infinity when either path has fewer than 2 points', () => {
+    const path = straightLinePoints();
+    expect(calculateDifference([], path)).toBe(Infinity);
+    expect(calculateDifference(path, [{ x: 0, y: 0 }])).toBe(Infinity);
+  });
+
+  it('returns a value close to π/2 for a 90-degree rotation', () => {
+    // horizontal line vs vertical line
+    const horiz = straightLinePoints(100);
+    const vert = Array.from({ length: NUM_POINTS }, (_, i) => ({
+      x: 0,
+      y: (i / (NUM_POINTS - 1)) * 100,
+    }));
+    const diff = calculateDifference(horiz, vert);
+    expect(diff).toBeCloseTo(Math.PI / 2, 5);
+  });
+
+  it('returns a small value for very similar (slightly perturbed) paths', () => {
+    const path = straightLinePoints(100);
+    const perturbed = path.map((p, i) => ({ x: p.x, y: i % 2 === 0 ? 0 : 0.5 }));
+    const diff = calculateDifference(path, perturbed);
+    expect(diff).toBeLessThan(ANGULAR_THRESHOLD);
+  });
+
+  it('returns a large value for very different paths (horizontal vs vertical)', () => {
+    const straight = straightLinePoints(100);
+    const vertical = Array.from({ length: NUM_POINTS }, (_, i) => ({
+      x: 0,
+      y: (i / (NUM_POINTS - 1)) * 100,
+    }));
+    const diff = calculateDifference(straight, vertical);
+    expect(diff).toBeGreaterThan(ANGULAR_THRESHOLD);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSignature (legacy)
 // ---------------------------------------------------------------------------
 
 describe('buildSignature', () => {
@@ -58,7 +107,7 @@ describe('buildSignature', () => {
 });
 
 // ---------------------------------------------------------------------------
-// euclideanDistance
+// euclideanDistance (legacy)
 // ---------------------------------------------------------------------------
 
 describe('euclideanDistance', () => {
@@ -75,7 +124,7 @@ describe('euclideanDistance', () => {
 });
 
 // ---------------------------------------------------------------------------
-// cosineSimilarity
+// cosineSimilarity (legacy)
 // ---------------------------------------------------------------------------
 
 describe('cosineSimilarity', () => {
@@ -101,6 +150,12 @@ describe('cosineSimilarity', () => {
   });
 });
 
+// Verify that legacy threshold constants are still exported.
+test('EUCLIDEAN_THRESHOLD and COSINE_THRESHOLD are exported', () => {
+  expect(typeof EUCLIDEAN_THRESHOLD).toBe('number');
+  expect(typeof COSINE_THRESHOLD).toBe('number');
+});
+
 // ---------------------------------------------------------------------------
 // matchGesture
 // ---------------------------------------------------------------------------
@@ -112,66 +167,63 @@ describe('matchGesture', () => {
   });
 
   it('matches an identical gesture', () => {
-    const raw = horizontalLine(100, 200);
-    const points = normalizeTo40Points(raw)!;
-    const sig = buildSignature(points);
+    const points = normalizeTo40Points(horizontalLine(100, 200))!;
 
     const saved: SavedGesture = {
       label: 'straight-line',
       packageName: 'com.example.app',
-      signature: sig,
+      normalizedPath: points,
     };
 
     const result = matchGesture(points, [saved]);
     expect(result).not.toBeNull();
     expect(result!.gesture.label).toBe('straight-line');
-    expect(result!.euclideanDistance).toBeCloseTo(0, 5);
-    expect(result!.cosineSimilarity).toBeCloseTo(1, 5);
+    expect(result!.angularDifference).toBeCloseTo(0, 5);
   });
 
-  it('returns null when only gesture has wrong signature length', () => {
+  it('returns null when gesture has no normalizedPath', () => {
+    const points = normalizeTo40Points(horizontalLine(100, 200))!;
+    const saved = { label: 'legacy', signature: [0, 1, 2] } as unknown as SavedGesture;
+    expect(matchGesture(points, [saved])).toBeNull();
+  });
+
+  it('returns null when gesture normalizedPath is too short', () => {
     const points = normalizeTo40Points(horizontalLine(100, 200))!;
     const saved: SavedGesture = {
-      label: 'bad-sig',
-      signature: [0, 1, 2], // wrong length
+      label: 'bad-path',
+      normalizedPath: [{ x: 0, y: 0 }],
     };
     expect(matchGesture(points, [saved])).toBeNull();
   });
 
-  it('returns null when no gesture is within thresholds', () => {
-    // Create two very different gestures: a straight line vs a jagged path
-    const straightRaw = horizontalLine(100, 200);
-    const straightPoints = normalizeTo40Points(straightRaw)!;
+  it('returns null when no gesture is within the threshold', () => {
+    const straightPoints = normalizeTo40Points(horizontalLine(100, 200))!;
 
-    // Build a zigzag that will have large turning angles
-    const zigzagRaw: Point[] = Array.from({ length: 80 }, (_, i) => ({
-      x: i * 5,
-      y: i % 2 === 0 ? 0 : 50,
+    // A vertical line is 90 degrees away from horizontal → angularDiff ≈ π/2 ≫ 0.5
+    const verticalRaw: Point[] = Array.from({ length: 100 }, (_, i) => ({
+      x: 0,
+      y: i * 2,
     }));
-    const zigzagPoints = normalizeTo40Points(zigzagRaw)!;
-    const zigzagSig = buildSignature(zigzagPoints);
+    const verticalPoints = normalizeTo40Points(verticalRaw)!;
 
     const saved: SavedGesture = {
-      label: 'zigzag',
-      signature: zigzagSig,
+      label: 'vertical',
+      normalizedPath: verticalPoints,
     };
 
-    // A straight line should NOT match a zigzag
     expect(matchGesture(straightPoints, [saved])).toBeNull();
   });
 
   it('picks the closest gesture when multiple candidates exist', () => {
-    const rawA = horizontalLine(100, 200);
-    const pointsA = normalizeTo40Points(rawA)!;
-    const sigA = buildSignature(pointsA);
+    const points = normalizeTo40Points(horizontalLine(100, 200))!;
 
-    // Slightly perturb A to create gesture B
-    const sigB = sigA.map((v) => v + 0.01);
+    // Identical path → perfect match
+    const savedA: SavedGesture = { label: 'a', normalizedPath: points };
+    // Slightly perturbed path
+    const perturbedPath = points.map((p, i) => ({ x: p.x, y: i % 2 === 0 ? 0 : 0.5 }));
+    const savedB: SavedGesture = { label: 'b', normalizedPath: perturbedPath };
 
-    const savedA: SavedGesture = { label: 'a', signature: sigA };
-    const savedB: SavedGesture = { label: 'b', signature: sigB };
-
-    const result = matchGesture(pointsA, [savedA, savedB]);
+    const result = matchGesture(points, [savedA, savedB]);
     expect(result).not.toBeNull();
     expect(result!.gesture.label).toBe('a');
   });

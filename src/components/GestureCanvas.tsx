@@ -15,7 +15,7 @@ import Svg, { Path } from 'react-native-svg';
 import { RNLauncherKitHelper } from 'react-native-launcher-kit';
 
 import { Point, normalizeTo40Points } from '../utils/GestureNormalizer';
-import { SavedGesture, buildSignature, matchGesture } from '../utils/GestureMatcher';
+import { SavedGesture, matchGesture } from '../utils/GestureMatcher';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -27,7 +27,7 @@ interface GestureCanvasProps {
   /** Called when user triggers the escape hatch (long press) to open management screen. */
   onOpenManagement: () => void;
   /** Called when a new gesture needs an app assigned. gestureLabel is the temp label. */
-  onRequestAssignApp: (gestureLabel: string, signature: number[]) => void;
+  onRequestAssignApp: (gestureLabel: string, normalizedPath: Point[]) => void;
   /** Called with feedback message and type for the FeedbackOverlay. */
   onFeedback: (message: string, type: 'launching' | 'no_match' | 'saved' | 'error') => void;
 }
@@ -86,15 +86,14 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
         } else {
           // Gesture matched but no app mapped yet – ask user to assign one
           console.log(`Gesture "${gesture.label}" has no app mapped. Requesting assignment.`);
-          onRequestAssignApp(gesture.label, gesture.signature);
+          onRequestAssignApp(gesture.label, gesture.normalizedPath);
           onFeedback('Assign an app to this gesture', 'no_match');
         }
       } else {
         // No match – create a new gesture entry and ask user to assign an app
-        const signature = buildSignature(normalizedPoints);
         const label = `gesture_${Date.now()}`;
         console.log(`New gesture detected: ${label}`);
-        onRequestAssignApp(label, signature);
+        onRequestAssignApp(label, normalizedPoints);
         onFeedback('New gesture! Assign an app.', 'no_match');
       }
     },
