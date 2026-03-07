@@ -12,7 +12,7 @@
  *  3. Accept the best match when its score is below ANGULAR_THRESHOLD (0.5 rad).
  */
 
-import { Point, NUM_POINTS } from './GestureNormalizer';
+import { Point } from './GestureNormalizer';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,11 +25,6 @@ export interface SavedGesture {
   packageName?: string;
   /** The normalized 40-point gesture path used for angular-difference matching. */
   normalizedPath: Point[];
-  /**
-   * @deprecated Legacy turning-angle signature kept for backward-compatibility
-   * when loading old persisted data; not used for matching.
-   */
-  signature?: number[];
 }
 
 export interface MatchResult {
@@ -113,7 +108,7 @@ export function calculateBestDirectionDifference(
  * Compares the input path against each saved gesture's `normalizedPath` using
  * average angular difference.  Returns the best match if its score is below
  * ANGULAR_THRESHOLD, otherwise null.  Gestures without a valid `normalizedPath`
- * are skipped (backward-compatibility with legacy signature-only entries).
+ * are skipped.
  */
 export function matchGesture(
   normalizedPoints: Point[],
@@ -282,86 +277,4 @@ export function findBlendBoundsForDualMatch(
   }
 
   return { canMerge: true, minT, maxT };
-}
-
-// ---------------------------------------------------------------------------
-// Legacy / utility functions retained for backward-compatibility
-// ---------------------------------------------------------------------------
-
-/** The number of turning angles derived from NUM_POINTS points is NUM_POINTS - 2. */
-export const SIGNATURE_LENGTH = NUM_POINTS - 2;
-
-/** @deprecated Use ANGULAR_THRESHOLD / calculateDifference with normalizedPath instead. */
-export const EUCLIDEAN_THRESHOLD = 3.0;
-
-/** @deprecated Use ANGULAR_THRESHOLD / calculateDifference with normalizedPath instead. */
-export const COSINE_THRESHOLD = 0.92;
-
-/**
- * Returns the signed turning angle (in radians) at point B of the triplet A→B→C.
- * Positive = left turn, Negative = right turn.
- */
-function turningAngle(a: Point, b: Point, c: Point): number {
-  const v1x = b.x - a.x;
-  const v1y = b.y - a.y;
-  const v2x = c.x - b.x;
-  const v2y = c.y - b.y;
-
-  const dot = v1x * v2x + v1y * v2y;
-  const cross = v1x * v2y - v1y * v2x;
-
-  return Math.atan2(cross, dot);
-}
-
-/**
- * Builds the turning-angle signature from 40 normalised points.
- * Returns an array of `SIGNATURE_LENGTH` (38) angles in radians.
- * @deprecated New gestures use normalizedPath with calculateDifference.
- */
-export function buildSignature(points: Point[]): number[] {
-  if (points.length !== NUM_POINTS) {
-    throw new Error(
-      `buildSignature expects exactly ${NUM_POINTS} points, got ${points.length}`
-    );
-  }
-
-  const angles: number[] = [];
-  for (let i = 0; i < points.length - 2; i++) {
-    angles.push(turningAngle(points[i], points[i + 1], points[i + 2]));
-  }
-  return angles;
-}
-
-/**
- * Euclidean distance between two equal-length vectors.
- * @deprecated New gestures use calculateDifference on normalizedPath.
- */
-export function euclideanDistance(a: number[], b: number[]): number {
-  let sum = 0;
-  for (let i = 0; i < a.length; i++) {
-    const diff = a[i] - b[i];
-    sum += diff * diff;
-  }
-  return Math.sqrt(sum);
-}
-
-/**
- * Cosine similarity between two equal-length vectors.
- * Range [-1, 1]; 1 means identical direction.
- * @deprecated New gestures use calculateDifference on normalizedPath.
- */
-export function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  // Both vectors are zero-magnitude – they are identical (e.g. a perfectly straight line)
-  if (normA === 0 && normB === 0) return 1;
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denom === 0) return 0;
-  return dot / denom;
 }
