@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
+  InteractionManager,
   ListRenderItemInfo,
   Modal,
   StyleSheet,
@@ -91,11 +92,35 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({
   useEffect(() => {
     if (visible) {
       setQuery('');
-      setTimeout(() => {
-        searchInputRef.current?.focus();
-      }, 80);
     }
   }, [visible]);
+
+  const focusSearchInput = useCallback(() => {
+    // Modal mount/animation timing differs by platform; schedule a couple of
+    // focus attempts so the soft keyboard appears reliably after opening.
+    const interactionTask = InteractionManager.runAfterInteractions(() => {
+      searchInputRef.current?.focus();
+    });
+
+    const frameId = requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+
+    const timeoutId = setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 120);
+
+    return () => {
+      interactionTask.cancel();
+      cancelAnimationFrame(frameId);
+      clearTimeout(timeoutId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    return focusSearchInput();
+  }, [visible, focusSearchInput]);
 
   const priorityOrder = useMemo(() => {
     const map = new Map<string, number>();
@@ -163,6 +188,7 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
+        keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       />
@@ -178,6 +204,7 @@ const AssignAppModal: React.FC<AssignAppModalProps> = ({
       visible={visible}
       animationType="slide"
       onRequestClose={onCancel}
+      onShow={focusSearchInput}
       statusBarTranslucent
     >
       <View style={styles.container}>
