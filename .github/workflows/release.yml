@@ -53,16 +53,27 @@ jobs:
       - name: Build with EAS
         id: eas-build
         run: |
+          STDERR_FILE=$(mktemp)
+
+          # bash runs with -e in GitHub Actions; temporarily disable to inspect exit code.
+          set +e
           BUILD_OUTPUT=$(eas build \
             --platform android \
             --profile ${{ steps.profile.outputs.profile }} \
             --non-interactive \
-            --json 2>/dev/null)
+            --json 2>"$STDERR_FILE")
           BUILD_EXIT=$?
+          set -e
+
           if [ $BUILD_EXIT -ne 0 ]; then
             echo "EAS build command failed with exit code $BUILD_EXIT"
+            if [ -s "$STDERR_FILE" ]; then
+              echo "EAS error output:"
+              cat "$STDERR_FILE"
+            fi
             exit $BUILD_EXIT
           fi
+
           BUILD_URL=$(echo "$BUILD_OUTPUT" | jq -r '
             if type == "array" then .[0] else . end
             | .buildDetailsPageUrl // .id // empty
