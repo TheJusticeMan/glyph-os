@@ -39,7 +39,7 @@ jobs:
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
       - name: Determine build profile
         id: profile
