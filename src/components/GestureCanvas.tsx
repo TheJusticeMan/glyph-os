@@ -4,6 +4,8 @@
  * Full-screen drawing surface that:
  *  1. Captures raw touch points via PanResponder.
  *  2. Renders the stroke in real-time with react-native-svg.
+ *     When `trailEffect` is enabled the stroke is drawn as 5 overlapping
+ *     segments that fade and widen toward the tail (comet-trail style).
  *  3. On finger-release: normalises the stroke, attempts to match a saved
  *     gesture, and either launches the associated app or requests app assignment.
  *  4. Long-press (800 ms without movement) opens the management screen.
@@ -30,6 +32,12 @@ interface GestureCanvasProps {
   onRequestAssignApp: (gestureLabel: string, normalizedPath: Point[]) => void;
   /** Called with feedback message and type for the FeedbackOverlay. */
   onFeedback: (message: string, type: 'launching' | 'no_match' | 'saved' | 'error') => void;
+  /**
+   * When true the drawn line is rendered as a comet-trail: the tail fades out
+   * and widens while the tip stays bright and thin.  Disable on older devices
+   * to preserve performance (default: false).
+   */
+  trailEffect?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,6 +54,62 @@ function buildPathD(points: Point[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Trail rendering
+// ---------------------------------------------------------------------------
+
+/** Number of overlapping segments used to draw the comet-trail stroke. */
+const TRAIL_SEGMENTS = 5;
+
+/** Opacity of the oldest (tail) trail segment. */
+const TRAIL_MIN_OPACITY = 0.15;
+/** Opacity range from oldest to newest trail segment. */
+const TRAIL_OPACITY_RANGE = 0.85;
+/** Stroke-width of the oldest (tail) trail segment in pixels. */
+const TRAIL_MAX_WIDTH = 7.5;
+/** How many pixels narrower the tip is compared with the tail. */
+const TRAIL_WIDTH_RANGE = 5;
+
+interface TrailSegment {
+  d: string;
+  opacity: number;
+  strokeWidth: number;
+}
+
+/**
+ * Splits `points` into `TRAIL_SEGMENTS` overlapping slices ordered from
+ * oldest (index 0) to newest (last index).  Each slice is assigned a
+ * decreasing opacity and increasing stroke-width so the tail looks faded
+ * and wide while the tip is sharp and thin.
+ *
+ * Returns an empty array when fewer than 2 points are available.
+ */
+function buildTrailSegments(points: Point[]): TrailSegment[] {
+  if (points.length < 2) return [];
+
+  const n = points.length;
+  const result: TrailSegment[] = [];
+
+  for (let seg = 0; seg < TRAIL_SEGMENTS; seg++) {
+    // seg 0 = oldest portion, seg TRAIL_SEGMENTS-1 = newest portion
+    const startIdx = Math.floor((seg * (n - 1)) / TRAIL_SEGMENTS);
+    const endIdx = Math.min(n - 1, Math.floor(((seg + 1) * (n - 1)) / TRAIL_SEGMENTS));
+    if (endIdx <= startIdx) continue;
+
+    const slice = points.slice(startIdx, endIdx + 1);
+    if (slice.length < 2) continue;
+
+    const t = seg / (TRAIL_SEGMENTS - 1); // 0 (oldest) → 1 (newest)
+    result.push({
+      d: buildPathD(slice),
+      opacity: TRAIL_MIN_OPACITY + t * TRAIL_OPACITY_RANGE,
+      strokeWidth: TRAIL_MAX_WIDTH - t * TRAIL_WIDTH_RANGE,
+    });
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -54,6 +118,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
   onOpenManagement,
   onRequestAssignApp,
   onFeedback,
+  trailEffect = false,
 }) => {
   const rawPointsRef = useRef<Point[]>([]);
   const [pathD, setPathD] = useState<string>('');
@@ -177,19 +242,40 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
+
+  // When the trail effect is on we derive the visual from rawPointsRef
+  // (already updated before setPathD fires) so each re-render reflects the
+  // latest stroke.
+  const trailSegments = trailEffect ? buildTrailSegments(rawPointsRef.current) : null;
+
   return (
     <View style={styles.container} {...panResponder.panHandlers}>
       <Svg style={StyleSheet.absoluteFill}>
-        {pathD ? (
-          <Path
-            d={pathD}
-            stroke="#00FFCC"
-            strokeWidth={3}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            fill="none"
-          />
-        ) : null}
+        {trailSegments
+          ? trailSegments.map((seg, i) => (
+              <Path
+                key={i}
+                d={seg.d}
+                stroke="#00FFCC"
+                strokeWidth={seg.strokeWidth}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+                opacity={seg.opacity}
+              />
+            ))
+          : pathD
+            ? (
+              <Path
+                d={pathD}
+                stroke="#00FFCC"
+                strokeWidth={3}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+              />
+            )
+            : null}
       </Svg>
     </View>
   );

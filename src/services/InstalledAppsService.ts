@@ -20,8 +20,11 @@ type LauncherKitModule = {
 export interface AppDetail {
   label: string;
   packageName: string;
-  /** Base64-encoded app icon. */
-  icon: string;
+  /**
+   * App icon – may be a raw base64 string, a full `data:image/...;base64,` URI,
+   * or absent for some system apps.  Use `getIconUri()` to normalise.
+   */
+  icon?: string;
   version?: string;
   accentColor?: string;
 }
@@ -100,6 +103,20 @@ export function filterApps(apps: AppDetail[], query: string): AppDetail[] {
       app.label.toLowerCase().includes(lower) ||
       app.packageName.toLowerCase().includes(lower),
   );
+}
+
+/**
+ * Converts an app's raw icon value into a URI suitable for `<Image source={{ uri }}>`.
+ *
+ * Handles three cases from react-native-launcher-kit:
+ *  - Already a data URI (`data:image/...;base64,...`) → returned as-is
+ *  - Raw base64 string → prefixed with `data:image/png;base64,`
+ *  - Absent / empty → returns `null` (caller should show a placeholder)
+ */
+export function getIconUri(icon: string | undefined | null): string | null {
+  if (!icon) return null;
+  if (icon.startsWith('data:')) return icon;
+  return `data:image/png;base64,${icon}`;
 }
 
 /**

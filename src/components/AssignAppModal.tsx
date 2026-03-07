@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 
 import type { AppDetail } from '../services/InstalledAppsService';
-import { filterApps } from '../services/InstalledAppsService';
+import { filterApps, getIconUri } from '../services/InstalledAppsService';
 import useInstalledApps from '../hooks/useInstalledApps';
 
 // ---------------------------------------------------------------------------
@@ -45,14 +45,17 @@ interface AppRowProps {
 
 const AppRow: React.FC<AppRowProps> = React.memo(({ app, onPress }) => {
   const handlePress = useCallback(() => onPress(app), [app, onPress]);
+  const [iconFailed, setIconFailed] = useState(false);
+  const iconUri = getIconUri(app.icon);
 
   return (
     <TouchableOpacity style={styles.row} onPress={handlePress} activeOpacity={0.7}>
-      {app.icon ? (
+      {iconUri && !iconFailed ? (
         <Image
-          source={{ uri: `data:image/png;base64,${app.icon}` }}
+          source={{ uri: iconUri }}
           style={styles.icon}
           resizeMode="contain"
+          onError={() => setIconFailed(true)}
         />
       ) : (
         <View style={styles.iconPlaceholder} />

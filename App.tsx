@@ -30,6 +30,7 @@ import { Point } from './src/utils/GestureNormalizer';
 // ---------------------------------------------------------------------------
 
 const ONBOARDING_KEY = 'glyph_os_onboarding_done';
+const TRAIL_EFFECT_KEY = 'glyph_os_trail_effect';
 const FEEDBACK_DURATION_MS = 2000;
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,25 @@ export default function App() {
   const handleOnboardingDone = useCallback(async () => {
     await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
     setHasSeenOnboarding(true);
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // Trail effect setting – loaded from storage, persisted on toggle
+  // -------------------------------------------------------------------------
+  const [trailEffect, setTrailEffect] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem(TRAIL_EFFECT_KEY).then((value) => {
+      if (value === 'true') setTrailEffect(true);
+    });
+  }, []);
+
+  const handleToggleTrailEffect = useCallback(async () => {
+    setTrailEffect((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(TRAIL_EFFECT_KEY, String(next));
+      return next;
+    });
   }, []);
 
   // -------------------------------------------------------------------------
@@ -177,6 +197,7 @@ export default function App() {
           onOpenManagement={() => setShowManagement(true)}
           onRequestAssignApp={handleRequestAssignApp}
           onFeedback={showFeedback}
+          trailEffect={trailEffect}
         />
 
         {showManagement && (
@@ -186,6 +207,8 @@ export default function App() {
             onDeleteGesture={handleDeleteGesture}
             onClearAll={handleClearAll}
             onClose={() => setShowManagement(false)}
+            trailEffect={trailEffect}
+            onToggleTrailEffect={handleToggleTrailEffect}
           />
         )}
 
