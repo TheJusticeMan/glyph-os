@@ -39,11 +39,67 @@ npm run android    # Build and run on connected Android device/emulator
 npm start          # Start Expo dev server only
 ```
 
+`react-native-launcher-kit` is a native module and does not work in Expo Go.
+If the app list is empty or you see a linking error, install/run a native
+build with `npm run android` and then connect Metro with:
+
+```bash
+npx expo start --dev-client
+```
+
 ### Tests
 
 ```bash
-npx jest --no-coverage
+npm run test:ci    # Run all tests (CI-friendly, no watch mode)
+npm run typecheck  # TypeScript type-check without emitting files
 ```
+
+## EAS Build & Releases
+
+GlyphOS uses [Expo Application Services (EAS)](https://expo.dev/eas) for cloud builds and releases.
+
+### Install EAS CLI
+
+```bash
+npm install -g eas-cli
+```
+
+### Configure EXPO_TOKEN
+
+Generate a personal access token at **https://expo.dev/accounts/[your-account]/settings/access-tokens** (replace `[your-account]` with your Expo username) and store it as a repository secret named `EXPO_TOKEN` in **Settings → Secrets and variables → Actions** on GitHub.
+
+### Build Locally with EAS
+
+```bash
+# Log in to your Expo account first
+eas login
+
+# Development build (APK with dev client)
+eas build --platform android --profile development
+
+# Preview build (APK for sideloading/testing)
+eas build --platform android --profile preview
+
+# Production build (AAB for Play Store submission)
+eas build --platform android --profile production
+```
+
+EAS builds run in Expo's cloud infrastructure — no local Android SDK required. The CLI will print a build URL when the job is queued; the finished artifact can be downloaded from the Expo dashboard or via:
+
+```bash
+eas build:list
+```
+
+### Trigger a Release via Git Tag
+
+Pushing a tag matching `v*.*.*` automatically starts the GitHub Actions release workflow which builds the production AAB and creates a GitHub Release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+You can also trigger the workflow manually from the **Actions** tab using `workflow_dispatch` and selecting the desired build profile.
 
 ## How to Set as Default Launcher (Android)
 
@@ -73,19 +129,19 @@ npx jest --no-coverage
 
 ## Architecture
 
-| File | Responsibility |
-|------|---------------|
-| `App.tsx` | Root: state management, persistence, navigation between screens |
-| `src/components/GestureCanvas.tsx` | Touch capture, stroke rendering, gesture recognition |
-| `src/components/AssignAppModal.tsx` | App picker modal with search |
-| `src/components/GestureManagementScreen.tsx` | Gesture library CRUD |
-| `src/components/OnboardingScreen.tsx` | First-run tutorial |
-| `src/components/FeedbackOverlay.tsx` | Toast-style feedback |
-| `src/utils/GestureNormalizer.ts` | Resamples raw touch points to 40 equidistant points |
-| `src/utils/GestureMatcher.ts` | Turning-angle signature + Euclidean/cosine matching |
-| `src/utils/GestureStorage.ts` | AsyncStorage persistence with schema versioning |
-| `src/services/InstalledAppsService.ts` | Fetches & caches installed apps list |
-| `src/hooks/useInstalledApps.ts` | React hook wrapping the apps service |
+| File                                         | Responsibility                                                  |
+| -------------------------------------------- | --------------------------------------------------------------- |
+| `App.tsx`                                    | Root: state management, persistence, navigation between screens |
+| `src/components/GestureCanvas.tsx`           | Touch capture, stroke rendering, gesture recognition            |
+| `src/components/AssignAppModal.tsx`          | App picker modal with search                                    |
+| `src/components/GestureManagementScreen.tsx` | Gesture library CRUD                                            |
+| `src/components/OnboardingScreen.tsx`        | First-run tutorial                                              |
+| `src/components/FeedbackOverlay.tsx`         | Toast-style feedback                                            |
+| `src/utils/GestureNormalizer.ts`             | Resamples raw touch points to 40 equidistant points             |
+| `src/utils/GestureMatcher.ts`                | Turning-angle signature + Euclidean/cosine matching             |
+| `src/utils/GestureStorage.ts`                | AsyncStorage persistence with schema versioning                 |
+| `src/services/InstalledAppsService.ts`       | Fetches & caches installed apps list                            |
+| `src/hooks/useInstalledApps.ts`              | React hook wrapping the apps service                            |
 
 ## Known Limitations
 

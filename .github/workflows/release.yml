@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS build profile"
+        required: false
+        default: "production"
+        type: choice
+        options:
+          - production
+          - preview
+
+jobs:
+  eas-build:
+    name: EAS Build (Android)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up Expo & EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Determine build profile
+        id: profile
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "profile=production" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build with EAS
+        id: eas-build
+        run: |
+          BUILD_OUTPUT=$(eas build \
+            --platform android \
+            --profile ${{ steps.profile.outputs.profile }} \
+            --non-interactive \
+            --json 2>/dev/null)
+          BUILD_EXIT=$?
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "EAS build command failed with exit code $BUILD_EXIT"
+            exit $BUILD_EXIT
+          fi
+          BUILD_URL=$(echo "$BUILD_OUTPUT" | jq -r '
+            if type == "array" then .[0] else . end
+            | .buildDetailsPageUrl // .id // empty
+          ' 2>/dev/null || echo "")
+          if [ -n "$BUILD_URL" ]; then
+            echo "Build URL: $BUILD_URL"
+            echo "build_url=$BUILD_URL" >> "$GITHUB_OUTPUT"
+          else
+            echo "Build submitted to EAS. Check https://expo.dev for status."
+          fi
+
+      - name: Get tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=manual-$(date +'%Y%m%d%H%M%S')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "GlyphOS ${{ steps.tag.outputs.tag }}"
+          generate_release_notes: true
+          body: |
+            ## Android Build
+
+            This release was built with EAS Build (profile: `${{ steps.profile.outputs.profile }}`).
+
+            ${{ steps.eas-build.outputs.build_url && format('**EAS Build:** {0}', steps.eas-build.outputs.build_url) || '**EAS Build:** Check https://expo.dev for your build status and download link.' }}
+
+            ### Install
+
+            Download the `.apk` (preview) or `.aab` (production) from the EAS build page linked above, or from the Expo dashboard.
+
+            ### Set as Default Launcher
+
+            1. Install the APK on your Android device.
+            2. Press the Home button and select **GlyphOS** → **Always**.
