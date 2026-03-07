@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -39,7 +41,14 @@ jobs:
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Validate Expo token
+        run: |
+          if [ -z "${EXPO_TOKEN}" ]; then
+            echo "EXPO_TOKEN is not set. Add it in GitHub repo settings: Secrets and variables > Actions."
+            exit 1
+          fi
 
       - name: Determine build profile
         id: profile
