@@ -1,0 +1,18 @@
+# OSX
+#
+.DS_Store
+
+# Android/IntelliJ
+#
+build/
+.idea
+.gradle
+local.properties
+debug.keystore
+splashscreen_logo.png
+*.iml
+*.hprof
+.cxx/
+
+# Bundle artifacts
+*.jsbundle
