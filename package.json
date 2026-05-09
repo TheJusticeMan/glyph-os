@@ -4,7 +4,9 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
+    "metro": "EXPO_USE_COMMUNITY_AUTOLINKING=1 expo start --dev-client",
     "android": "EXPO_USE_COMMUNITY_AUTOLINKING=1 expo run:android",
+    "android:offline": "ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$HOME/Android/Sdk} PATH=$HOME/Android/Sdk/platform-tools:$PATH ./android/gradlew -p android installRelease",
     "ios": "expo run:ios",
     "postinstall": "patch-package",
     "test": "jest --watchAll",
