@@ -7,6 +7,7 @@ private const val ONBOARDING_KEY = "glyph_os_onboarding_done"
 private const val TRAIL_EFFECT_KEY = "glyph_os_trail_effect"
 private const val LAUNCH_ON_CREATE_SHORTCUT_KEY = "glyph_os_launch_on_create_shortcut"
 private const val ALLOW_BACKWARD_GESTURES_KEY = "glyph_os_allow_backward_gestures"
+private const val AUTO_PICK_ONLY_SEARCH_RESULT_KEY = "glyph_os_auto_pick_only_search_result"
 
 class AppSettings(context: Context) {
   private val preferences = context.getSharedPreferences(SETTINGS_NAME, Context.MODE_PRIVATE)
@@ -26,4 +27,8 @@ class AppSettings(context: Context) {
   var allowBackwardGestures: Boolean
     get() = preferences.getBoolean(ALLOW_BACKWARD_GESTURES_KEY, true)
     set(value) = preferences.edit().putBoolean(ALLOW_BACKWARD_GESTURES_KEY, value).apply()
+
+  var autoPickOnlySearchResult: Boolean
+    get() = preferences.getBoolean(AUTO_PICK_ONLY_SEARCH_RESULT_KEY, false)
+    set(value) = preferences.edit().putBoolean(AUTO_PICK_ONLY_SEARCH_RESULT_KEY, value).apply()
 }

@@ -71,6 +71,29 @@ class GestureMathTest {
     assertEquals((first[0].y + second[0].y) / 2, midpoint[0].y, 0.000001)
   }
 
+  @Test
+  fun defaultOpenAppListGestureMatchesStraightLines() {
+    val defaultGesture = defaultOpenAppListGesture()
+    val candidate = straightLinePoints(length = 320.0)
+
+    assertEquals(SPECIAL_ACTION_OPEN_APP_LIST, defaultGesture.specialActionId)
+    assertNotNull(matchGesture(candidate, listOf(defaultGesture), allowBackward = true))
+  }
+
+  @Test
+  fun rankSimilarTargetsIncludesSpecialFunctions() {
+    val candidate = straightLinePoints()
+    val ranked = rankSimilarTargets(
+      candidate,
+      listOf(defaultOpenAppListGesture()),
+      limit = 5,
+      allowBackward = true,
+    )
+
+    assertEquals(1, ranked.size)
+    assertEquals("special:$SPECIAL_ACTION_OPEN_APP_LIST", ranked.first().targetKey)
+  }
+
   private fun horizontalLine(rawCount: Int, length: Double): List<Point> {
     return List(rawCount) { index -> Point(index * length / (rawCount - 1), 0.0) }
   }

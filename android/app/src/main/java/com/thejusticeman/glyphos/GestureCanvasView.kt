@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.floor
@@ -18,10 +19,19 @@ private const val TRAIL_MIN_OPACITY = 0.15
 private const val TRAIL_OPACITY_RANGE = 0.85
 private const val TRAIL_MAX_WIDTH = 7.5
 private const val TRAIL_WIDTH_RANGE = 5.0
+private const val TAP_MAX_MOVEMENT_DP = 12
+private const val LABEL_MIN_ICON_DP = 58
 
 class GestureCanvasView(context: Context) : View(context) {
   var onGestureComplete: ((List<Point>) -> Unit)? = null
   var onLongPressOpenManagement: (() -> Unit)? = null
+  var onIconTapped: ((AppDetail) -> Unit)? = null
+  var onCanvasSizeChanged: (() -> Unit)? = null
+  var launcherIcons: List<LauncherIconNode> = emptyList()
+    set(value) {
+      field = value
+      invalidate()
+    }
   var trailEffect: Boolean = false
     set(value) {
       field = value
@@ -30,12 +40,23 @@ class GestureCanvasView(context: Context) : View(context) {
 
   private val rawPoints = mutableListOf<Point>()
   private val path = Path()
+  private val iconBounds = Rect()
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.rgb(0, 255, 204)
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     style = Paint.Style.STROKE
     strokeWidth = 3f
     strokeCap = Paint.Cap.ROUND
     strokeJoin = Paint.Join.ROUND
+  }
+  private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.WHITE
+    textAlign = Paint.Align.CENTER
+    textSize = dp(11).toFloat()
+    setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat(), Color.BLACK)
+  }
+  private val fallbackIconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
+    alpha = 180
   }
 
   private var downX = 0f
@@ -91,6 +112,14 @@ class GestureCanvasView(context: Context) : View(context) {
           return true
         }
 
+        if (isTap(event.x, event.y)) {
+          hitTestIcon(event.x, event.y)?.let { icon ->
+            clearNow()
+            onIconTapped?.invoke(icon.app)
+            return true
+          }
+        }
+
         normalizeTo40Points(rawPoints)?.let { onGestureComplete?.invoke(it) }
         postDelayed({ clearNow() }, CLEAR_CANVAS_MS)
         return true
@@ -108,6 +137,7 @@ class GestureCanvasView(context: Context) : View(context) {
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
+    drawLauncherIcons(canvas)
     if (trailEffect) {
       drawTrail(canvas)
     } else {
@@ -115,10 +145,69 @@ class GestureCanvasView(context: Context) : View(context) {
     }
   }
 
+  override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+    super.onSizeChanged(width, height, oldWidth, oldHeight)
+    if (width != oldWidth || height != oldHeight) {
+      onCanvasSizeChanged?.invoke()
+    }
+  }
+
   private fun clearNow() {
     rawPoints.clear()
     path.reset()
     invalidate()
+  }
+
+  private fun isTap(x: Float, y: Float): Boolean {
+    val movement = hypot((x - downX).toDouble(), (y - downY).toDouble())
+    return movement <= dp(TAP_MAX_MOVEMENT_DP)
+  }
+
+  private fun hitTestIcon(x: Float, y: Float): LauncherIconNode? {
+    for (icon in launcherIcons.asReversed()) {
+      val dx = x - icon.x.toFloat()
+      val dy = y - icon.y.toFloat()
+      if (hypot(dx.toDouble(), dy.toDouble()) <= icon.radiusPx) {
+        return icon
+      }
+    }
+    return null
+  }
+
+  private fun drawLauncherIcons(canvas: Canvas) {
+    for (icon in launcherIcons) {
+      val halfSize = (icon.sizePx / 2.0).toInt()
+      val left = icon.x.toInt() - halfSize
+      val top = icon.y.toInt() - halfSize
+      val right = icon.x.toInt() + halfSize
+      val bottom = icon.y.toInt() + halfSize
+      iconBounds.set(left, top, right, bottom)
+
+      val drawable = icon.app.icon
+      if (drawable == null) {
+        canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), icon.radiusPx.toFloat(), fallbackIconPaint)
+      } else {
+        drawable.setBounds(iconBounds)
+        drawable.draw(canvas)
+      }
+
+      if (icon.sizePx >= dp(LABEL_MIN_ICON_DP)) {
+        drawIconLabel(canvas, icon)
+      }
+    }
+  }
+
+  private fun drawIconLabel(canvas: Canvas, icon: LauncherIconNode) {
+    val maxWidth = (icon.sizePx * 1.25).toFloat()
+    val label = icon.app.label
+    val measuredCount = labelPaint.breakText(label, true, maxWidth, null)
+    val visibleLabel = if (measuredCount < label.length && measuredCount > 1) {
+      label.take(measuredCount - 1) + "..."
+    } else {
+      label
+    }
+    val baseline = (icon.y + icon.radiusPx + dp(14)).toFloat().coerceAtMost(height - dp(6).toFloat())
+    canvas.drawText(visibleLabel, icon.x.toFloat(), baseline, labelPaint)
   }
 
   private fun drawTrail(canvas: Canvas) {
@@ -153,4 +242,6 @@ class GestureCanvasView(context: Context) : View(context) {
     paint.alpha = originalAlpha
     paint.strokeWidth = originalWidth
   }
+
+  private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }

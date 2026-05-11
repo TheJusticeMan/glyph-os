@@ -1,22 +1,32 @@
 package com.thejusticeman.glyphos
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.Dialog
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.AbsListView
 import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.RadioButton
@@ -25,20 +35,30 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
+import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
-private const val FEEDBACK_DURATION_MS = 2000L
+private const val HOME_ICON_MIN_DP = 44
+private const val HOME_ICON_MAX_DP = 112
+private const val HOME_ICON_AREA_BUDGET = 0.42
+private const val HOME_ICON_FOOTPRINT_FACTOR = 1.55
+private const val HOME_ICON_MIN_VISIBLE = 24
+private const val HOME_ICON_MAX_VISIBLE = 64
 
 class MainActivity : Activity() {
   private lateinit var settings: AppSettings
   private lateinit var gestureStore: GestureStore
   private lateinit var installedApps: InstalledApps
+  private lateinit var launchUsageStore: LaunchUsageStore
   private lateinit var canvasView: GestureCanvasView
-  private lateinit var feedbackView: TextView
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val appRefreshExecutor = Executors.newSingleThreadExecutor()
 
   private var savedGestures: MutableList<SavedGesture> = mutableListOf()
   private var pendingGesture: PendingGesture? = null
-  private var feedbackHideRunnable: Runnable? = null
+  private var launchCounts: Map<String, Int> = emptyMap()
+  private val activeDialogs = mutableSetOf<Dialog>()
 
   override fun onCreate(savedInstanceState: Bundle?) {
     setTheme(R.style.AppTheme)
@@ -51,9 +71,14 @@ class MainActivity : Activity() {
     settings = AppSettings(this)
     gestureStore = GestureStore(this)
     installedApps = InstalledApps(this)
+    launchUsageStore = LaunchUsageStore(this)
+    launchCounts = launchUsageStore.getLaunchCounts()
     savedGestures = gestureStore.loadGestures().toMutableList()
+    seedDefaultOpenListGestureIfNeeded()
 
     setContentView(buildRootView())
+    updateLauncherIcons()
+    refreshInstalledAppCache { updateLauncherIcons(it) }
 
     if (!settings.onboardingDone) {
       showOnboardingDialog()
@@ -63,6 +88,17 @@ class MainActivity : Activity() {
   @Deprecated("Deprecated in Java")
   override fun onBackPressed() {
     // A launcher should not exit when Back is pressed from the root screen.
+  }
+
+  override fun onPause() {
+    dismissActiveDialogs()
+    super.onPause()
+  }
+
+  override fun onDestroy() {
+    mainHandler.removeCallbacksAndMessages(null)
+    appRefreshExecutor.shutdownNow()
+    super.onDestroy()
   }
 
   private fun buildRootView(): View {
@@ -78,33 +114,15 @@ class MainActivity : Activity() {
       trailEffect = settings.trailEffect
       onGestureComplete = ::handleGestureComplete
       onLongPressOpenManagement = ::showManagementDialog
+      onIconTapped = ::handleLauncherIconTapped
+      onCanvasSizeChanged = { updateLauncherIcons() }
       layoutParams = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.MATCH_PARENT,
       )
     }
 
-    feedbackView = TextView(this).apply {
-      visibility = View.GONE
-      alpha = 0f
-      setTextColor(Color.WHITE)
-      textSize = 14f
-      gravity = Gravity.CENTER
-      setPadding(dp(24), dp(12), dp(24), dp(12))
-      background = roundedBackground(Color.rgb(0, 51, 51), Color.rgb(0, 255, 204), dp(32).toFloat())
-      layoutParams = FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.WRAP_CONTENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT,
-        Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
-      ).apply {
-        bottomMargin = dp(60)
-        leftMargin = dp(20)
-        rightMargin = dp(20)
-      }
-    }
-
     root.addView(canvasView)
-    root.addView(feedbackView)
     return root
   }
 
@@ -116,14 +134,7 @@ class MainActivity : Activity() {
     )
 
     if (match != null) {
-      val packageName = match.gesture.packageName
-      if (packageName != null) {
-        val launched = installedApps.launchApp(packageName)
-        showFeedback(if (launched) "Launching ${match.gesture.label}" else "Launch failed")
-      } else {
-        requestAssignApp(match.gesture.label, match.gesture.normalizedPath)
-        showFeedback("Assign an app to this gesture")
-      }
+      executeGesture(match.gesture)
       return
     }
 
@@ -133,29 +144,31 @@ class MainActivity : Activity() {
 
   private fun requestAssignApp(label: String, normalizedPath: List<Point>) {
     pendingGesture = PendingGesture(label, normalizedPath)
-    val prioritizedPackageNames = rankSimilarApps(
+    val prioritizedTargetKeys = rankSimilarTargets(
       normalizedPath,
       savedGestures,
       limit = 5,
       allowBackward = settings.allowBackwardGestures,
-    ).map { it.packageName }
+    ).map { it.targetKey }
 
     showAppPickerDialog(
       title = "Assign App to Gesture",
-      prioritizedPackageNames = prioritizedPackageNames,
+      prioritizedTargetKeys = prioritizedTargetKeys,
+      includeSpecialFunctions = true,
     ) { selectedApp ->
       handleAssignApp(selectedApp)
     }
   }
 
-  private fun handleAssignApp(app: AppDetail) {
+  private fun handleAssignApp(target: AppDetail) {
     val incoming = pendingGesture ?: return
+    val selectedTargetKey = target.targetKey()
     val existingForApp = savedGestures.filter { gesture ->
-      gesture.packageName == app.packageName && gesture.normalizedPath.size >= 2
+      gesture.targetKey() == selectedTargetKey && gesture.normalizedPath.size >= 2
     }
 
     if (existingForApp.isEmpty()) {
-      appendBinding(app, incoming)
+      appendBinding(target, incoming)
       return
     }
 
@@ -168,56 +181,92 @@ class MainActivity : Activity() {
     }
 
     if (mergeTarget == null) {
-      appendBinding(app, incoming)
+      appendBinding(target, incoming)
       return
     }
 
     val bounds = findBlendBoundsForDualMatch(mergeTarget.normalizedPath, incoming.normalizedPath)
     if (!bounds.canMerge) {
-      appendBinding(app, incoming)
+      appendBinding(target, incoming)
       return
     }
 
-    showMergeDialog(app, mergeTarget, incoming, bounds)
+    showMergeDialog(target, mergeTarget, incoming, bounds)
   }
 
-  private fun appendBinding(app: AppDetail, gesture: PendingGesture) {
+  private fun appendBinding(target: AppDetail, gesture: PendingGesture) {
     savedGestures += SavedGesture(
       label = gesture.label,
-      packageName = app.packageName,
+      packageName = target.packageName.takeUnless { target.isSpecialFunction() },
+      specialActionId = target.specialActionId,
       normalizedPath = gesture.normalizedPath,
     )
     persistGestures()
     showFeedback("App assigned!")
-    maybeLaunchAfterAssign(app)
+    maybeLaunchAfterAssign(target)
     pendingGesture = null
   }
 
-  private fun maybeLaunchAfterAssign(app: AppDetail) {
+  private fun maybeLaunchAfterAssign(target: AppDetail) {
     if (!settings.launchOnCreateShortcut) return
-    val launched = installedApps.launchApp(app.packageName)
-    if (!launched) showFeedback("Assigned, but launch failed")
+    if (target.isSpecialFunction()) {
+      executeSpecialFunction(target.specialActionId)
+    } else {
+      val launched = launchAppPackage(target.packageName)
+      if (!launched) showFeedback("Assigned, but launch failed")
+    }
+  }
+
+  private fun executeGesture(gesture: SavedGesture) {
+    when {
+      gesture.specialActionId != null -> executeSpecialFunction(gesture.specialActionId)
+      gesture.packageName != null -> {
+        val launched = launchAppPackage(gesture.packageName)
+        if (!launched) showFeedback("Launch failed")
+      }
+      else -> {
+        requestAssignApp(gesture.label, gesture.normalizedPath)
+        showFeedback("Assign an app to this gesture")
+      }
+    }
+  }
+
+  private fun executeSpecialFunction(actionId: String?) {
+    when (actionId) {
+      SPECIAL_ACTION_OPEN_APP_LIST -> showLaunchListDialog()
+      else -> showFeedback("Special function unavailable")
+    }
+  }
+
+  private fun showLaunchListDialog() {
+    showAppPickerDialog(
+      title = "Open App",
+      includeSpecialFunctions = false,
+    ) { app ->
+      val launched = launchAppPackage(app.packageName)
+      showFeedback(if (launched) "Launching ${app.label}" else "Launch failed")
+    }
+  }
+
+  private fun handleLauncherIconTapped(app: AppDetail) {
+    val launched = launchAppPackage(app.packageName)
+    if (!launched) showFeedback("Launch failed")
   }
 
   private fun showMergeDialog(
-    app: AppDetail,
+    target: AppDetail,
     mergeTarget: SavedGesture,
     incoming: PendingGesture,
     bounds: BlendBoundsResult,
   ) {
-    val dialog = Dialog(this)
-    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-
     var currentT = (bounds.minT + bounds.maxT) / 2
 
     val content = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
-      setPadding(dp(18), dp(18), dp(18), dp(18))
-      setBackgroundColor(Color.rgb(19, 19, 19))
+      setPadding(0, dp(8), 0, 0)
     }
 
-    content.addView(titleText("Gesture Conflict Found", 20f))
-    content.addView(bodyText("${app.label} already has a gesture. Merge the old and new swipe, or keep both bindings."))
+    content.addView(bodyText("${target.label} already has a gesture. Merge the old and new swipe, or keep both bindings."))
 
     val previews = LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
@@ -236,12 +285,10 @@ class MainActivity : Activity() {
     }
     val mergeChoice = RadioButton(this).apply {
       text = "Merge"
-      setTextColor(Color.WHITE)
       isChecked = true
     }
     val createChoice = RadioButton(this).apply {
       text = "Create Another"
-      setTextColor(Color.WHITE)
     }
     choiceGroup.addView(mergeChoice, weightedParams())
     choiceGroup.addView(createChoice, weightedParams())
@@ -267,105 +314,143 @@ class MainActivity : Activity() {
     }
     content.addView(seekBar)
 
-    val actions = LinearLayout(this).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.END
-    }
-    actions.addView(secondaryButton("Cancel") { dialog.dismiss() }, weightedParams())
+    val dialog = fullScreenDialog()
+    val root = screenDialogRoot("Gesture Conflict Found")
+    root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+    val actions = dialogActions()
     actions.addView(primaryButton("Continue") {
-      if (createChoice.isChecked) {
-        appendBinding(app, incoming)
+        if (createChoice.isChecked) {
+          appendBinding(target, incoming)
+          dialog.dismiss()
+          return@primaryButton
+        }
+
+        val blendedPath = blendNormalizedPaths(mergeTarget.normalizedPath, incoming.normalizedPath, currentT)
+        if (blendedPath.size < 2) {
+          appendBinding(target, incoming)
+        } else {
+          savedGestures = savedGestures.map { gesture ->
+            if (gesture.label == mergeTarget.label) gesture.copy(normalizedPath = blendedPath) else gesture
+          }.toMutableList()
+          persistGestures()
+          showFeedback("Gestures merged!")
+          maybeLaunchAfterAssign(target)
+          pendingGesture = null
+        }
         dialog.dismiss()
-        return@primaryButton
-      }
+    }, actionButtonParams())
+    root.addView(actions)
 
-      val blendedPath = blendNormalizedPaths(mergeTarget.normalizedPath, incoming.normalizedPath, currentT)
-      if (blendedPath.size < 2) {
-        appendBinding(app, incoming)
-      } else {
-        savedGestures = savedGestures.map { gesture ->
-          if (gesture.label == mergeTarget.label) gesture.copy(normalizedPath = blendedPath) else gesture
-        }.toMutableList()
-        persistGestures()
-        showFeedback("Gestures merged!")
-        maybeLaunchAfterAssign(app)
-        pendingGesture = null
-      }
-      dialog.dismiss()
-    }, weightedParams())
-    content.addView(actions)
-
-    dialog.setContentView(content)
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    trackDialog(dialog)
     dialog.show()
-    dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-    dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+    expandDialog(dialog)
   }
 
   private fun showAppPickerDialog(
     title: String,
-    prioritizedPackageNames: List<String> = emptyList(),
+    prioritizedTargetKeys: List<String> = emptyList(),
+    includeSpecialFunctions: Boolean = false,
     onSelect: (AppDetail) -> Unit,
   ) {
-    val dialog = Dialog(this)
-    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-
-    val apps = installedApps.getInstalledApps()
-    val priorityOrder = prioritizedPackageNames.withIndex().associate { it.value to it.index }
+    var apps = buildTargetList(includeSpecialFunctions, cachedInstalledApps())
+    val priorityOrder = prioritizedTargetKeys.withIndex().associate { it.value to it.index }
     val adapter = AppListAdapter(this)
+    lateinit var dialog: Dialog
+    val root = screenDialogRoot(title)
+    lateinit var search: EditText
+    var selectionHandled = false
+
+    fun selectApp(app: AppDetail) {
+      if (selectionHandled) return
+      selectionHandled = true
+      hideKeyboard(search)
+      dialog.dismiss()
+      onSelect(app)
+    }
+
+    fun selectTopApp(): Boolean {
+      if (adapter.count == 0) return false
+      selectApp(adapter.getItem(0))
+      return true
+    }
 
     fun applyFilter(query: String) {
-      val base = installedApps.filterApps(apps, query)
-      adapter.apps = base.sortedWith { left, right ->
-        val leftRank = priorityOrder[left.packageName] ?: Int.MAX_VALUE
-        val rightRank = priorityOrder[right.packageName] ?: Int.MAX_VALUE
+      val result = installedApps.filterApps(apps, query)
+      adapter.showPackageNames = result.isPackageSearch
+      adapter.apps = result.apps.sortedWith { left, right ->
+        val leftRank = priorityOrder[left.targetKey()] ?: Int.MAX_VALUE
+        val rightRank = priorityOrder[right.targetKey()] ?: Int.MAX_VALUE
         when {
           leftRank != rightRank -> leftRank - rightRank
+          left.isSpecialFunction() != right.isSpecialFunction() -> if (left.isSpecialFunction()) -1 else 1
           else -> 0
+        }
+      }
+
+      if (settings.autoPickOnlySearchResult && query.trim().isNotEmpty() && adapter.count == 1) {
+        val stableQuery = query
+        root.post {
+          if (!selectionHandled && search.text?.toString() == stableQuery && adapter.count == 1) {
+            selectTopApp()
+          }
         }
       }
     }
 
-    val root = LinearLayout(this).apply {
-      orientation = LinearLayout.VERTICAL
-      setPadding(dp(16), dp(44), dp(16), dp(18))
-      setBackgroundColor(Color.rgb(17, 17, 17))
-    }
-    root.addView(titleText(title, 20f).apply { gravity = Gravity.CENTER })
-
-    val search = EditText(this).apply {
+    search = EditText(this).apply {
       hint = "Search apps"
-      setHintTextColor(Color.rgb(85, 85, 85))
-      setTextColor(Color.WHITE)
       textSize = 15f
       setSingleLine(true)
-      setPadding(dp(12), dp(10), dp(12), dp(10))
-      background = roundedBackground(Color.rgb(26, 26, 26), Color.rgb(0, 255, 204), dp(8).toFloat())
+      imeOptions = EditorInfo.IME_ACTION_GO
+      setOnEditorActionListener { _, actionId, event ->
+        val isEnterKey = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
+        if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE || isEnterKey) {
+          selectTopApp()
+        } else {
+          false
+        }
+      }
     }
     root.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-      topMargin = dp(16)
       bottomMargin = dp(8)
     })
 
     val hint = bodyText("Top 5 similar apps are pinned first").apply {
-      visibility = if (prioritizedPackageNames.isEmpty()) View.GONE else View.VISIBLE
-      setTextColor(Color.rgb(111, 111, 111))
+      visibility = if (prioritizedTargetKeys.isEmpty()) View.GONE else View.VISIBLE
       textSize = 12f
     }
     root.addView(hint)
 
     val listView = ListView(this).apply {
-      divider = ColorDrawable(Color.rgb(34, 34, 34))
-      dividerHeight = 1
-      setBackgroundColor(Color.TRANSPARENT)
       this.adapter = adapter
       setOnItemClickListener { _, _, position, _ ->
-        val selectedApp = adapter.getItem(position)
-        dialog.dismiss()
-        onSelect(selectedApp)
+        selectApp(adapter.getItem(position))
       }
+      setOnScrollListener(object : AbsListView.OnScrollListener {
+        private var lastFirstVisibleItem = 0
+
+        override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
+          if (scrollState != AbsListView.OnScrollListener.SCROLL_STATE_IDLE) {
+            hideKeyboard(search)
+          }
+        }
+
+        override fun onScroll(
+          view: AbsListView?,
+          firstVisibleItem: Int,
+          visibleItemCount: Int,
+          totalItemCount: Int,
+        ) {
+          if (firstVisibleItem > lastFirstVisibleItem) {
+            hideKeyboard(search)
+          }
+          lastFirstVisibleItem = firstVisibleItem
+        }
+      })
     }
     root.addView(listView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-    root.addView(secondaryButton("Cancel") { dialog.dismiss() })
 
     search.addTextChangedListener(object : TextWatcher {
       override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -376,64 +461,70 @@ class MainActivity : Activity() {
     })
 
     applyFilter("")
+
+    dialog = fullScreenDialog()
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.window?.setSoftInputMode(
+      WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+        WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE,
+    )
     dialog.setContentView(root)
+    dialog.setOnShowListener {
+      search.requestFocus()
+      showKeyboard(search)
+    }
+    trackDialog(dialog) { hideKeyboard(search) }
     dialog.show()
-    dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-    search.requestFocus()
+    expandDialog(dialog, showKeyboard = true)
+
+    refreshInstalledAppCache { refreshedApps ->
+      if (!dialog.isShowing || selectionHandled) return@refreshInstalledAppCache
+      apps = buildTargetList(includeSpecialFunctions, refreshedApps)
+      applyFilter(search.text?.toString().orEmpty())
+    }
   }
 
   private fun showManagementDialog() {
-    val dialog = Dialog(this)
-    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    val dialog = fullScreenDialog()
 
-    val appLabels = installedApps.getInstalledApps().associate { it.packageName to it.label }
-    val root = LinearLayout(this).apply {
-      orientation = LinearLayout.VERTICAL
-      setPadding(dp(16), dp(44), dp(16), dp(16))
-      setBackgroundColor(Color.BLACK)
-    }
+    val appLabels = cachedAppLabels()
+    val root = screenDialogRoot("Gesture Library")
 
-    val header = LinearLayout(this).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER_VERTICAL
-    }
-    header.addView(titleText("Gesture Library", 22f), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-    header.addView(secondaryButton("Close") { dialog.dismiss() })
-    root.addView(header)
-
-    root.addView(settingsRow("Trail effect", settings.trailEffect) { checked ->
+    root.addView(settingsSwitchRow("Trail effect", "Show a fading trail while drawing", settings.trailEffect) { checked ->
       settings.trailEffect = checked
       canvasView.trailEffect = checked
     })
-    root.addView(settingsRow("Open app after create", settings.launchOnCreateShortcut) { checked ->
+    root.addView(settingDivider())
+    root.addView(settingsSwitchRow("Open app after create", "Launch a target immediately after assigning it", settings.launchOnCreateShortcut) { checked ->
       settings.launchOnCreateShortcut = checked
     })
-    root.addView(settingsRow("Match backwards gestures", settings.allowBackwardGestures) { checked ->
+    root.addView(settingDivider())
+    root.addView(settingsSwitchRow("Match backwards gestures", "Allow the same gesture in reverse", settings.allowBackwardGestures) { checked ->
       settings.allowBackwardGestures = checked
     })
-
-    val utilityRow = LinearLayout(this).apply {
-      orientation = LinearLayout.HORIZONTAL
-      setPadding(0, dp(8), 0, dp(8))
-    }
-    utilityRow.addView(secondaryButton("Wallpaper") { openWallpaperChooser() }, weightedParams())
-    utilityRow.addView(secondaryButton("Home App") { openHomeAppSettings() }, weightedParams())
-    root.addView(utilityRow)
-
-    root.addView(primaryButton("Clear All") {
-      AlertDialog.Builder(this)
-        .setTitle("Clear All Gestures")
-        .setMessage("This will permanently delete every saved gesture. Continue?")
-        .setNegativeButton("Cancel", null)
-        .setPositiveButton("Clear All") { _, _ ->
-          savedGestures.clear()
-          gestureStore.clearGestures()
-          dialog.dismiss()
-          showManagementDialog()
-          showFeedback("Gestures cleared")
-        }
-        .show()
+    root.addView(settingDivider())
+    root.addView(settingsSwitchRow("Auto-pick only search result", "Choose the app automatically when search leaves one match", settings.autoPickOnlySearchResult) { checked ->
+      settings.autoPickOnlySearchResult = checked
     })
+    root.addView(settingDivider())
+    root.addView(settingsActionRow("Wallpaper", "Open Android wallpaper and style", onClick = ::openWallpaperChooser))
+    root.addView(settingDivider())
+    root.addView(settingsActionRow("Home app", "Choose the default launcher", onClick = ::openHomeAppSettings))
+    root.addView(settingDivider())
+    root.addView(settingsActionRow("Clear all gestures", "Delete every saved gesture", destructive = true) {
+      showConfirmDialog(
+        title = "Clear All Gestures",
+        message = "This will permanently delete every saved gesture. Continue?",
+        confirmText = "Clear All",
+      ) {
+        savedGestures.clear()
+        gestureStore.clearGestures()
+        dialog.dismiss()
+        showManagementDialog()
+        showFeedback("Gestures cleared")
+      }
+    })
+    root.addView(settingDivider())
 
     val scroll = ScrollView(this)
     val list = LinearLayout(this).apply {
@@ -445,18 +536,20 @@ class MainActivity : Activity() {
       list.addView(bodyText("No gestures saved yet.").apply { gravity = Gravity.CENTER })
     } else {
       savedGestures.forEach { gesture ->
-        list.addView(gestureRow(gesture, appLabels[gesture.packageName] ?: gesture.packageName ?: "No app assigned", dialog))
+        list.addView(gestureRow(gesture, targetLabel(gesture, appLabels), targetSubtitle(gesture), dialog))
       }
     }
     scroll.addView(list)
     root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
     dialog.setContentView(root)
+    trackDialog(dialog)
     dialog.show()
-    dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    expandDialog(dialog)
   }
 
-  private fun gestureRow(gesture: SavedGesture, appLabel: String, ownerDialog: Dialog): View {
+  private fun gestureRow(gesture: SavedGesture, appLabel: String, targetSubtitle: String, ownerDialog: Dialog): View {
     val row = LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
       gravity = Gravity.CENTER_VERTICAL
@@ -471,22 +564,32 @@ class MainActivity : Activity() {
     }
     labels.addView(TextView(this).apply {
       text = appLabel
-      setTextColor(Color.WHITE)
+      setTextColor(primaryTextColor())
       textSize = 15f
       maxLines = 1
     })
     labels.addView(TextView(this).apply {
-      text = gesture.packageName ?: "No app assigned"
-      setTextColor(Color.rgb(136, 136, 136))
+      text = targetSubtitle
+      setTextColor(secondaryTextColor())
       textSize = 12f
       maxLines = 1
     })
     row.addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
     row.addView(secondaryButton("Reassign") {
-      showAppPickerDialog("Reassign Gesture") { app ->
+      showAppPickerDialog(
+        title = "Reassign Gesture",
+        includeSpecialFunctions = true,
+      ) { app ->
         savedGestures = savedGestures.map { current ->
-          if (current.label == gesture.label) current.copy(packageName = app.packageName) else current
+          if (current.label == gesture.label) {
+            current.copy(
+              packageName = app.packageName.takeUnless { app.isSpecialFunction() },
+              specialActionId = app.specialActionId,
+            )
+          } else {
+            current
+          }
         }.toMutableList()
         persistGestures()
         ownerDialog.dismiss()
@@ -495,44 +598,38 @@ class MainActivity : Activity() {
       }
     })
     row.addView(secondaryButton("Delete") {
-      AlertDialog.Builder(this)
-        .setTitle("Delete Gesture")
-        .setMessage("Delete ${gesture.label}?")
-        .setNegativeButton("Cancel", null)
-        .setPositiveButton("Delete") { _, _ ->
-          savedGestures.removeAll { it.label == gesture.label }
-          persistGestures()
-          ownerDialog.dismiss()
-          showManagementDialog()
-          showFeedback("Gesture deleted")
-        }
-        .show()
+      showConfirmDialog(
+        title = "Delete Gesture",
+        message = "Delete ${gesture.label}?",
+        confirmText = "Delete",
+      ) {
+        savedGestures.removeAll { it.label == gesture.label }
+        persistGestures()
+        ownerDialog.dismiss()
+        showManagementDialog()
+        showFeedback("Gesture deleted")
+      }
     })
     return row
   }
 
   private fun showOnboardingDialog() {
-    AlertDialog.Builder(this)
-      .setTitle("GlyphOS")
-      .setMessage("Draw a gesture anywhere to assign or launch an app. Long press the screen to manage gestures.")
-      .setPositiveButton("Start") { _, _ -> settings.onboardingDone = true }
-      .show()
+    val dialog = Dialog(this)
+    val root = compactDialogRoot("GlyphOS")
+    root.addView(bodyText("Draw a straight line to open the app list. Draw any other gesture to assign or launch an app. Long press the screen to manage gestures."))
+    root.addView(primaryButton("Start") {
+      settings.onboardingDone = true
+      dialog.dismiss()
+    })
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    trackDialog(dialog)
+    dialog.show()
+    fitCompactDialog(dialog)
   }
 
   private fun showFeedback(message: String) {
-    feedbackHideRunnable?.let { feedbackView.removeCallbacks(it) }
-    feedbackView.text = message
-    feedbackView.visibility = View.VISIBLE
-    feedbackView.animate().cancel()
-    feedbackView.alpha = 0f
-    feedbackView.animate().alpha(1f).setDuration(200).start()
-
-    val hideRunnable = Runnable {
-      feedbackView.visibility = View.GONE
-      feedbackHideRunnable = null
-    }
-    feedbackHideRunnable = hideRunnable
-    feedbackView.postDelayed(hideRunnable, FEEDBACK_DURATION_MS)
+    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
   }
 
   private fun persistGestures() {
@@ -555,6 +652,123 @@ class MainActivity : Activity() {
     }
   }
 
+  private fun seedDefaultOpenListGestureIfNeeded() {
+    val alreadyExists = savedGestures.any { it.specialActionId == SPECIAL_ACTION_OPEN_APP_LIST }
+    if (!alreadyExists) {
+      savedGestures += defaultOpenAppListGesture()
+      persistGestures()
+    }
+  }
+
+  private fun buildTargetList(includeSpecialFunctions: Boolean, apps: List<AppDetail>): List<AppDetail> {
+    val specialTargets = if (includeSpecialFunctions) {
+      SpecialFunctions.all.map(SpecialFunctions::asTarget)
+    } else {
+      emptyList()
+    }
+    return specialTargets + apps
+  }
+
+  private fun cachedInstalledApps(): List<AppDetail> = installedApps.getCachedInstalledApps().orEmpty()
+
+  private fun cachedAppLabels(): Map<String, String> {
+    return cachedInstalledApps().associate { it.packageName to it.label }
+  }
+
+  private fun refreshInstalledAppCache(onLoaded: ((List<AppDetail>) -> Unit)? = null) {
+    appRefreshExecutor.execute {
+      val refreshedApps = installedApps.getInstalledApps(forceRefresh = true)
+      mainHandler.post {
+        if (!isFinishing && !isDestroyed) {
+          onLoaded?.invoke(refreshedApps)
+        }
+      }
+    }
+  }
+
+  private fun launchAppPackage(packageName: String): Boolean {
+    val launched = installedApps.launchApp(packageName)
+    if (launched) {
+      val nextCount = launchUsageStore.increment(packageName)
+      launchCounts = launchCounts + (packageName to nextCount)
+      updateLauncherIcons()
+    }
+    return launched
+  }
+
+  private fun updateLauncherIcons(apps: List<AppDetail> = cachedInstalledApps()) {
+    if (!::canvasView.isInitialized) return
+    if (canvasView.width <= 0 || canvasView.height <= 0) {
+      canvasView.post { updateLauncherIcons(apps) }
+      return
+    }
+
+    val minIconSize = dp(HOME_ICON_MIN_DP).toDouble()
+    val maxIconSize = dp(HOME_ICON_MAX_DP).toDouble()
+    canvasView.launcherIcons = LauncherIconLayout.build(
+      apps = selectHomeApps(apps, minIconSize, maxIconSize),
+      launchCounts = launchCounts,
+      widthPx = canvasView.width,
+      heightPx = canvasView.height,
+      minSizePx = minIconSize,
+      maxSizePx = maxIconSize,
+    )
+  }
+
+  private fun selectHomeApps(apps: List<AppDetail>, minIconSize: Double, maxIconSize: Double): List<AppDetail> {
+    if (apps.isEmpty()) return emptyList()
+
+    val maxCount = launchCounts.values.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val sortedApps = apps.sortedWith(
+      compareByDescending<AppDetail> { launchCounts[it.packageName]?.coerceAtLeast(0) ?: 0 }
+        .thenBy { it.label.lowercase() }
+        .thenBy { it.packageName },
+    )
+    val canvasArea = canvasView.width.toDouble() * canvasView.height.toDouble()
+    val areaBudget = canvasArea * HOME_ICON_AREA_BUDGET
+    val adaptiveMaxVisible = (canvasArea / (minIconSize * minIconSize * HOME_ICON_FOOTPRINT_FACTOR))
+      .roundToInt()
+      .coerceIn(HOME_ICON_MIN_VISIBLE, HOME_ICON_MAX_VISIBLE)
+      .coerceAtMost(apps.size)
+    val minimumVisible = HOME_ICON_MIN_VISIBLE.coerceAtMost(apps.size)
+    val selected = mutableListOf<AppDetail>()
+    var usedArea = 0.0
+
+    for (app in sortedApps) {
+      val launchCount = launchCounts[app.packageName]?.coerceAtLeast(0) ?: 0
+      val iconSize = LauncherIconLayout.iconSize(launchCount, maxCount, minIconSize, maxIconSize)
+      val footprint = iconSize * iconSize * HOME_ICON_FOOTPRINT_FACTOR
+      val mustFillStarterSet = selected.size < minimumVisible
+      val fitsFrequencySurface = selected.size < adaptiveMaxVisible && usedArea + footprint <= areaBudget
+      if (!mustFillStarterSet && !fitsFrequencySurface) break
+
+      selected += app
+      usedArea += footprint
+    }
+
+    return selected
+  }
+
+  private fun targetLabel(
+    gesture: SavedGesture,
+    appLabels: Map<String, String> = cachedAppLabels(),
+  ): String {
+    gesture.specialActionId?.let { actionId ->
+      return SpecialFunctions.find(actionId)?.label ?: gesture.label
+    }
+    gesture.packageName?.let { packageName ->
+      return appLabels[packageName] ?: packageName
+    }
+    return "No app assigned"
+  }
+
+  private fun targetSubtitle(gesture: SavedGesture): String {
+    gesture.specialActionId?.let { actionId ->
+      return SpecialFunctions.find(actionId)?.subtitle ?: "Special function"
+    }
+    return gesture.packageName ?: "No app assigned"
+  }
+
   private fun previewColumn(title: String, points: List<Point>, preview: GesturePreviewView = GesturePreviewView(this)): View {
     preview.points = points
     return LinearLayout(this).apply {
@@ -562,7 +776,7 @@ class MainActivity : Activity() {
       gravity = Gravity.CENTER
       addView(TextView(this@MainActivity).apply {
         text = title
-        setTextColor(Color.rgb(154, 154, 154))
+        setTextColor(secondaryTextColor())
         textSize = 11f
         gravity = Gravity.CENTER
       })
@@ -570,28 +784,85 @@ class MainActivity : Activity() {
     }
   }
 
-  private fun settingsRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
+  private fun settingsSwitchRow(
+    label: String,
+    summary: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+  ): View {
+    lateinit var switch: Switch
     return LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
       gravity = Gravity.CENTER_VERTICAL
+      minimumHeight = dp(72)
       setPadding(0, dp(8), 0, dp(8))
-      addView(TextView(this@MainActivity).apply {
-        text = label
-        setTextColor(Color.WHITE)
-        textSize = 15f
-      }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-      addView(Switch(this@MainActivity).apply {
+      applySelectableItemBackground()
+      addView(settingsTextColumn(label, summary), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+      switch = Switch(this@MainActivity).apply {
         isChecked = checked
         setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean -> onChange(isChecked) }
+      }
+      addView(switch)
+      setOnClickListener {
+        switch.isChecked = !switch.isChecked
+      }
+    }
+  }
+
+  private fun settingsActionRow(
+    label: String,
+    summary: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+  ): View {
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      minimumHeight = dp(64)
+      setPadding(0, dp(8), 0, dp(8))
+      applySelectableItemBackground()
+      addView(settingsTextColumn(label, summary, destructive), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+      addView(ImageView(this@MainActivity).apply {
+        setImageResource(R.drawable.ic_chevron_right_24)
+        setColorFilter(secondaryTextColor())
+        contentDescription = null
+      }, LinearLayout.LayoutParams(dp(32), dp(32)))
+      setOnClickListener { onClick() }
+    }
+  }
+
+  private fun settingsTextColumn(label: String, summary: String, destructive: Boolean = false): View {
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      addView(TextView(this@MainActivity).apply {
+        text = label
+        setTextColor(if (destructive) Color.rgb(186, 26, 26) else primaryTextColor())
+        textSize = 16f
+        maxLines = 1
       })
+      addView(TextView(this@MainActivity).apply {
+        text = summary
+        setTextColor(secondaryTextColor())
+        textSize = 13f
+        maxLines = 2
+      })
+    }
+  }
+
+  private fun settingDivider(): View {
+    return View(this).apply {
+      setBackgroundColor(themeColor(android.R.attr.textColorHint, Color.LTGRAY))
+      alpha = 0.35f
+      layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
     }
   }
 
   private fun titleText(text: String, size: Float): TextView {
     return TextView(this).apply {
       this.text = text
-      setTextColor(Color.rgb(0, 255, 204))
+      setTextColor(primaryTextColor())
       textSize = size
+      typeface = Typeface.DEFAULT_BOLD
       gravity = Gravity.START
       setPadding(0, dp(4), 0, dp(4))
     }
@@ -600,7 +871,7 @@ class MainActivity : Activity() {
   private fun bodyText(text: String): TextView {
     return TextView(this).apply {
       this.text = text
-      setTextColor(Color.rgb(204, 204, 204))
+      setTextColor(secondaryTextColor())
       textSize = 14f
       setPadding(0, dp(4), 0, dp(4))
     }
@@ -609,8 +880,6 @@ class MainActivity : Activity() {
   private fun primaryButton(text: String, onClick: () -> Unit): Button {
     return Button(this).apply {
       this.text = text
-      setTextColor(Color.BLACK)
-      setBackgroundColor(Color.rgb(0, 255, 204))
       setOnClickListener { onClick() }
     }
   }
@@ -618,18 +887,149 @@ class MainActivity : Activity() {
   private fun secondaryButton(text: String, onClick: () -> Unit): Button {
     return Button(this).apply {
       this.text = text
-      setTextColor(Color.rgb(0, 255, 204))
-      setBackgroundColor(Color.rgb(42, 42, 42))
       setOnClickListener { onClick() }
     }
   }
 
-  private fun roundedBackground(fillColor: Int, strokeColor: Int, radius: Float): android.graphics.drawable.Drawable {
-    return android.graphics.drawable.GradientDrawable().apply {
-      shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-      cornerRadius = radius
-      setColor(fillColor)
-      setStroke(dp(1), strokeColor)
+  private fun showConfirmDialog(
+    title: String,
+    message: String,
+    confirmText: String,
+    onConfirm: () -> Unit,
+  ) {
+    val dialog = Dialog(this)
+    val root = compactDialogRoot(title)
+    root.addView(bodyText(message))
+
+    val actions = dialogActions()
+    actions.addView(primaryButton(confirmText) {
+      onConfirm()
+      dialog.dismiss()
+    }, actionButtonParams())
+    root.addView(actions)
+
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    trackDialog(dialog)
+    dialog.show()
+    fitCompactDialog(dialog)
+  }
+
+  private fun trackDialog(dialog: Dialog, onDismiss: (() -> Unit)? = null) {
+    activeDialogs += dialog
+    dialog.setOnDismissListener {
+      activeDialogs -= dialog
+      onDismiss?.invoke()
+    }
+  }
+
+  private fun dismissActiveDialogs() {
+    activeDialogs.toList().forEach { dialog ->
+      if (dialog.isShowing) dialog.dismiss()
+    }
+  }
+
+  private fun screenDialogRoot(title: String): LinearLayout {
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(16), dp(28), dp(16), dp(12))
+      setBackgroundColor(dialogBackgroundColor())
+      addView(titleText(title, 22f), LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+      ).apply {
+        bottomMargin = dp(8)
+      })
+    }
+  }
+
+  private fun compactDialogRoot(title: String): LinearLayout {
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(24), dp(20), dp(24), dp(16))
+      setBackgroundColor(dialogBackgroundColor())
+      addView(titleText(title, 20f), LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+      ).apply {
+        bottomMargin = dp(8)
+      })
+    }
+  }
+
+  private fun dialogActions(): LinearLayout {
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.END
+      setPadding(0, dp(8), 0, 0)
+    }
+  }
+
+  private fun actionButtonParams(): LinearLayout.LayoutParams {
+    return LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+      leftMargin = dp(8)
+    }
+  }
+
+  private fun expandDialog(dialog: Dialog, showKeyboard: Boolean = false) {
+    dialog.window?.apply {
+      setBackgroundDrawable(ColorDrawable(dialogBackgroundColor()))
+      val softInputMode = if (showKeyboard) {
+        WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+          WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+      } else {
+        WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+      }
+      setSoftInputMode(softInputMode)
+      setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    }
+  }
+
+  private fun fullScreenDialog(): Dialog {
+    return Dialog(this, R.style.FullscreenDialogTheme)
+  }
+
+  private fun fitCompactDialog(dialog: Dialog) {
+    dialog.window?.apply {
+      setBackgroundDrawable(ColorDrawable(dialogBackgroundColor()))
+      setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+  }
+
+  private fun showKeyboard(view: View) {
+    view.isFocusableInTouchMode = true
+    view.requestFocus()
+    view.post {
+      view.requestFocus()
+      val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+      inputMethodManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+    }
+    view.postDelayed({
+      view.requestFocus()
+      val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+      inputMethodManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+    }, 250)
+  }
+
+  private fun hideKeyboard(view: View) {
+    val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+    inputMethodManager.hideSoftInputFromWindow(view.windowToken, 0)
+    view.clearFocus()
+  }
+
+  private fun primaryTextColor(): Int = themeColor(android.R.attr.textColorPrimary, Color.BLACK)
+
+  private fun secondaryTextColor(): Int = themeColor(android.R.attr.textColorSecondary, Color.DKGRAY)
+
+  private fun dialogBackgroundColor(): Int {
+    val themedColor = themeColor(android.R.attr.colorBackground, Color.TRANSPARENT)
+    if (Color.alpha(themedColor) > 0) return themedColor
+
+    val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    return if (nightMode == Configuration.UI_MODE_NIGHT_YES) {
+      Color.rgb(18, 18, 18)
+    } else {
+      Color.WHITE
     }
   }
 

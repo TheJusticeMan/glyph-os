@@ -17,6 +17,12 @@ class AppListAdapter(private val context: Context) : BaseAdapter() {
       notifyDataSetChanged()
     }
 
+  var showPackageNames: Boolean = false
+    set(value) {
+      field = value
+      notifyDataSetChanged()
+    }
+
   override fun getCount(): Int = apps.size
 
   override fun getItem(position: Int): AppDetail = apps[position]
@@ -29,7 +35,9 @@ class AppListAdapter(private val context: Context) : BaseAdapter() {
       val root = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(12), dp(10), dp(12), dp(10))
+        minimumHeight = dp(64)
+        setPadding(dp(16), dp(8), dp(16), dp(8))
+        applySelectableItemBackground()
       }
       val icon = ImageView(context).apply {
         layoutParams = LinearLayout.LayoutParams(dp(42), dp(42))
@@ -40,12 +48,12 @@ class AppListAdapter(private val context: Context) : BaseAdapter() {
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
       }
       val label = TextView(context).apply {
-        setTextColor(Color.WHITE)
+        setTextColor(context.themeColor(android.R.attr.textColorPrimary, Color.BLACK))
         textSize = 15f
         maxLines = 1
       }
       val packageName = TextView(context).apply {
-        setTextColor(Color.rgb(136, 136, 136))
+        setTextColor(context.themeColor(android.R.attr.textColorSecondary, Color.DKGRAY))
         textSize = 12f
         maxLines = 1
       }
@@ -62,9 +70,26 @@ class AppListAdapter(private val context: Context) : BaseAdapter() {
     }
 
     val app = getItem(position)
-    holder.icon.setImageDrawable(app.icon)
+    if (app.icon != null) {
+      holder.icon.setImageDrawable(app.icon)
+      holder.icon.clearColorFilter()
+      holder.icon.setBackgroundColor(Color.TRANSPARENT)
+    } else {
+      holder.icon.setImageResource(android.R.drawable.ic_menu_view)
+      holder.icon.setBackgroundColor(Color.TRANSPARENT)
+    }
     holder.label.text = app.label
-    holder.packageName.text = app.packageName
+    val secondaryText = when {
+      showPackageNames -> app.packageName
+      app.isSpecialFunction() -> app.subtitle
+      else -> null
+    }
+    if (secondaryText.isNullOrBlank()) {
+      holder.packageName.visibility = View.GONE
+    } else {
+      holder.packageName.visibility = View.VISIBLE
+      holder.packageName.text = secondaryText
+    }
     return row
   }
 

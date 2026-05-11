@@ -15,7 +15,7 @@ class GesturePreviewView(context: Context) : View(context) {
     }
 
   private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.rgb(0, 255, 204)
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     style = Paint.Style.STROKE
     strokeWidth = 2f
     strokeCap = Paint.Cap.ROUND
@@ -23,13 +23,13 @@ class GesturePreviewView(context: Context) : View(context) {
   }
 
   private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.rgb(42, 42, 42)
+    color = context.themeColor(android.R.attr.textColorHint, Color.LTGRAY)
     style = Paint.Style.STROKE
     strokeWidth = 1f
   }
 
   private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.rgb(13, 13, 13)
+    color = context.themeColor(android.R.attr.colorBackgroundFloating, Color.WHITE)
     style = Paint.Style.FILL
   }
 

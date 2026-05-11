@@ -12,8 +12,15 @@ data class Point(val x: Double, val y: Double)
 data class SavedGesture(
   val label: String,
   val packageName: String? = null,
+  val specialActionId: String? = null,
   val normalizedPath: List<Point>,
-)
+) {
+  fun targetKey(): String? {
+    packageName?.let { return "package:$it" }
+    specialActionId?.let { return "special:$it" }
+    return null
+  }
+}
 
 data class MatchResult(
   val gesture: SavedGesture,
@@ -22,6 +29,11 @@ data class MatchResult(
 
 data class SimilarAppMatch(
   val packageName: String,
+  val angularDifference: Double,
+)
+
+data class SimilarTargetMatch(
+  val targetKey: String,
   val angularDifference: Double,
 )
 
@@ -175,6 +187,46 @@ fun rankSimilarApps(
     .map { SimilarAppMatch(it.key, it.value) }
     .sortedWith(compareBy<SimilarAppMatch> { it.angularDifference }.thenBy { it.packageName })
     .take(max(0, limit))
+}
+
+fun rankSimilarTargets(
+  normalizedPoints: List<Point>,
+  savedGestures: List<SavedGesture>,
+  limit: Int = 5,
+  allowBackward: Boolean = false,
+): List<SimilarTargetMatch> {
+  val byTarget = mutableMapOf<String, Double>()
+
+  for (gesture in savedGestures) {
+    val targetKey = gesture.targetKey() ?: continue
+    if (gesture.normalizedPath.size < 2) continue
+
+    val difference = calculateBestDirectionDifference(
+      normalizedPoints,
+      gesture.normalizedPath,
+      allowBackward,
+    )
+    val current = byTarget[targetKey]
+    if (current == null || difference < current) {
+      byTarget[targetKey] = difference
+    }
+  }
+
+  return byTarget.entries
+    .map { SimilarTargetMatch(it.key, it.value) }
+    .sortedWith(compareBy<SimilarTargetMatch> { it.angularDifference }.thenBy { it.targetKey })
+    .take(max(0, limit))
+}
+
+fun defaultOpenAppListGesture(): SavedGesture {
+  val path = List(NUM_POINTS) { index ->
+    Point(x = index * 240.0 / (NUM_POINTS - 1), y = 0.0)
+  }
+  return SavedGesture(
+    label = "Open app list",
+    specialActionId = SPECIAL_ACTION_OPEN_APP_LIST,
+    normalizedPath = path,
+  )
 }
 
 fun blendNormalizedPaths(lineA: List<Point>, lineB: List<Point>, t: Double): List<Point> {

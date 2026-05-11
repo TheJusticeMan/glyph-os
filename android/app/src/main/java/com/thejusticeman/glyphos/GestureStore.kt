@@ -59,7 +59,13 @@ class GestureStore(context: Context) {
     }
 
     val packageName = json.optString("packageName", "").takeIf { it.isNotBlank() }
-    return SavedGesture(label = label, packageName = packageName, normalizedPath = path)
+    val specialActionId = json.optString("specialActionId", "").takeIf { it.isNotBlank() }
+    return SavedGesture(
+      label = label,
+      packageName = packageName,
+      specialActionId = specialActionId,
+      normalizedPath = path,
+    )
   }
 
   private fun gesturesToJson(gestures: List<SavedGesture>): JSONArray {
@@ -69,6 +75,7 @@ class GestureStore(context: Context) {
         .put("label", gesture.label)
         .put("normalizedPath", pointsToJson(gesture.normalizedPath))
       gesture.packageName?.let { json.put("packageName", it) }
+      gesture.specialActionId?.let { json.put("specialActionId", it) }
       array.put(json)
     }
     return array
