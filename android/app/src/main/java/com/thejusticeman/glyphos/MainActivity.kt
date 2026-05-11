@@ -112,10 +112,12 @@ class MainActivity : Activity() {
 
     canvasView = GestureCanvasView(this).apply {
       trailEffect = settings.trailEffect
+      iconScale = settings.homeIconScale
       onGestureComplete = ::handleGestureComplete
       onLongPressOpenManagement = ::showManagementDialog
       onIconTapped = ::handleLauncherIconTapped
       onCanvasSizeChanged = { updateLauncherIcons() }
+      onIconScaleChanged = { scale -> settings.homeIconScale = scale }
       layoutParams = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.MATCH_PARENT,

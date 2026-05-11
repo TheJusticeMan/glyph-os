@@ -21,15 +21,25 @@ private const val TRAIL_MAX_WIDTH = 7.5
 private const val TRAIL_WIDTH_RANGE = 5.0
 private const val TAP_MAX_MOVEMENT_DP = 12
 private const val LABEL_MIN_ICON_DP = 58
+private const val ICON_SCALE_MIN = 0.0f
+private const val ICON_SCALE_MAX = 1.0f
+private const val MIN_PINCH_DISTANCE_PX = 24f
+private const val PINCH_ICON_SCALE_RESPONSE = 2.0f
 
 class GestureCanvasView(context: Context) : View(context) {
   var onGestureComplete: ((List<Point>) -> Unit)? = null
   var onLongPressOpenManagement: (() -> Unit)? = null
   var onIconTapped: ((AppDetail) -> Unit)? = null
   var onCanvasSizeChanged: (() -> Unit)? = null
+  var onIconScaleChanged: ((Float) -> Unit)? = null
   var launcherIcons: List<LauncherIconNode> = emptyList()
     set(value) {
       field = value
+      invalidate()
+    }
+  var iconScale: Float = 1.0f
+    set(value) {
+      field = value.coerceIn(ICON_SCALE_MIN, ICON_SCALE_MAX)
       invalidate()
     }
   var trailEffect: Boolean = false
@@ -62,6 +72,10 @@ class GestureCanvasView(context: Context) : View(context) {
   private var downX = 0f
   private var downY = 0f
   private var longPressTriggered = false
+  private var pinching = false
+  private var suppressGestureUntilAllPointersUp = false
+  private var pinchStartDistance = 0f
+  private var pinchStartScale = 1.0f
 
   private val longPressRunnable = Runnable {
     longPressTriggered = true
@@ -79,6 +93,8 @@ class GestureCanvasView(context: Context) : View(context) {
       MotionEvent.ACTION_DOWN -> {
         removeCallbacks(longPressRunnable)
         longPressTriggered = false
+        pinching = false
+        suppressGestureUntilAllPointersUp = false
         downX = event.x
         downY = event.y
         rawPoints.clear()
@@ -90,7 +106,29 @@ class GestureCanvasView(context: Context) : View(context) {
         return true
       }
 
+      MotionEvent.ACTION_POINTER_DOWN -> {
+        if (event.pointerCount >= 2) {
+          beginPinch(event)
+        }
+        return true
+      }
+
       MotionEvent.ACTION_MOVE -> {
+        if (pinching) {
+          updatePinch(event)
+          return true
+        }
+
+        if (suppressGestureUntilAllPointersUp) {
+          clearNow()
+          return true
+        }
+
+        if (event.pointerCount >= 2) {
+          beginPinch(event)
+          return true
+        }
+
         if (longPressTriggered) return true
 
         val totalMovement = hypot((event.x - downX).toDouble(), (event.y - downY).toDouble())
@@ -104,8 +142,27 @@ class GestureCanvasView(context: Context) : View(context) {
         return true
       }
 
+      MotionEvent.ACTION_POINTER_UP -> {
+        if (pinching && event.pointerCount <= 2) {
+          finishPinch()
+        }
+        return true
+      }
+
       MotionEvent.ACTION_UP -> {
         removeCallbacks(longPressRunnable)
+        if (pinching) {
+          finishPinch()
+          suppressGestureUntilAllPointersUp = false
+          return true
+        }
+
+        if (suppressGestureUntilAllPointersUp) {
+          suppressGestureUntilAllPointersUp = false
+          clearNow()
+          return true
+        }
+
         if (longPressTriggered) {
           longPressTriggered = false
           clearNow()
@@ -128,6 +185,8 @@ class GestureCanvasView(context: Context) : View(context) {
       MotionEvent.ACTION_CANCEL -> {
         removeCallbacks(longPressRunnable)
         longPressTriggered = false
+        pinching = false
+        suppressGestureUntilAllPointersUp = false
         clearNow()
         return true
       }
@@ -167,16 +226,56 @@ class GestureCanvasView(context: Context) : View(context) {
     for (icon in launcherIcons.asReversed()) {
       val dx = x - icon.x.toFloat()
       val dy = y - icon.y.toFloat()
-      if (hypot(dx.toDouble(), dy.toDouble()) <= icon.radiusPx) {
+      if (hypot(dx.toDouble(), dy.toDouble()) <= icon.radiusPx * iconScale) {
         return icon
       }
     }
     return null
   }
 
+  private fun beginPinch(event: MotionEvent) {
+    removeCallbacks(longPressRunnable)
+    longPressTriggered = false
+    pinching = true
+    suppressGestureUntilAllPointersUp = true
+    pinchStartDistance = pointerDistance(event).coerceAtLeast(MIN_PINCH_DISTANCE_PX)
+    pinchStartScale = iconScale
+    clearNow()
+  }
+
+  private fun updatePinch(event: MotionEvent) {
+    if (event.pointerCount < 2) return
+    val distance = pointerDistance(event).coerceAtLeast(MIN_PINCH_DISTANCE_PX)
+    val pinchRatio = distance / pinchStartDistance
+    val nextScale = (pinchStartScale + (pinchRatio - 1.0f) * PINCH_ICON_SCALE_RESPONSE)
+      .coerceIn(ICON_SCALE_MIN, ICON_SCALE_MAX)
+    if (nextScale != iconScale) {
+      iconScale = nextScale
+      onIconScaleChanged?.invoke(nextScale)
+    }
+  }
+
+  private fun finishPinch() {
+    pinching = false
+    rawPoints.clear()
+    path.reset()
+    invalidate()
+  }
+
+  private fun pointerDistance(event: MotionEvent): Float {
+    if (event.pointerCount < 2) return 0f
+    return hypot(
+      (event.getX(1) - event.getX(0)).toDouble(),
+      (event.getY(1) - event.getY(0)).toDouble(),
+    ).toFloat()
+  }
+
   private fun drawLauncherIcons(canvas: Canvas) {
     for (icon in launcherIcons) {
-      val halfSize = (icon.sizePx / 2.0).toInt()
+      val scaledSize = icon.sizePx * iconScale
+      if (scaledSize < 1.0) continue
+
+      val halfSize = (scaledSize / 2.0).toInt()
       val left = icon.x.toInt() - halfSize
       val top = icon.y.toInt() - halfSize
       val right = icon.x.toInt() + halfSize
@@ -185,20 +284,20 @@ class GestureCanvasView(context: Context) : View(context) {
 
       val drawable = icon.app.icon
       if (drawable == null) {
-        canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), icon.radiusPx.toFloat(), fallbackIconPaint)
+        canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), (icon.radiusPx * iconScale).toFloat(), fallbackIconPaint)
       } else {
         drawable.setBounds(iconBounds)
         drawable.draw(canvas)
       }
 
-      if (icon.sizePx >= dp(LABEL_MIN_ICON_DP)) {
-        drawIconLabel(canvas, icon)
+      if (scaledSize >= dp(LABEL_MIN_ICON_DP)) {
+        drawIconLabel(canvas, icon, scaledSize)
       }
     }
   }
 
-  private fun drawIconLabel(canvas: Canvas, icon: LauncherIconNode) {
-    val maxWidth = (icon.sizePx * 1.25).toFloat()
+  private fun drawIconLabel(canvas: Canvas, icon: LauncherIconNode, scaledSize: Double) {
+    val maxWidth = (scaledSize * 1.25).toFloat()
     val label = icon.app.label
     val measuredCount = labelPaint.breakText(label, true, maxWidth, null)
     val visibleLabel = if (measuredCount < label.length && measuredCount > 1) {
@@ -206,7 +305,7 @@ class GestureCanvasView(context: Context) : View(context) {
     } else {
       label
     }
-    val baseline = (icon.y + icon.radiusPx + dp(14)).toFloat().coerceAtMost(height - dp(6).toFloat())
+    val baseline = (icon.y + (scaledSize / 2.0) + dp(14)).toFloat().coerceAtMost(height - dp(6).toFloat())
     canvas.drawText(visibleLabel, icon.x.toFloat(), baseline, labelPaint)
   }
 
