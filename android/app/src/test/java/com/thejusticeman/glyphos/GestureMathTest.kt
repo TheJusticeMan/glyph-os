@@ -17,6 +17,12 @@ class GestureMathTest {
   }
 
   @Test
+  fun normalizeTo40PointsRequiresMinimumGestureLength() {
+    assertNull(normalizeTo40Points(horizontalLine(rawCount = 20, length = MIN_GESTURE_LENGTH_PX - 0.1)))
+    assertNotNull(normalizeTo40Points(horizontalLine(rawCount = 20, length = MIN_GESTURE_LENGTH_PX)))
+  }
+
+  @Test
   fun normalizeTo40PointsProducesExpectedHorizontalSpacing() {
     val result = normalizeTo40Points(horizontalLine(rawCount = 200, length = 390.0))
     assertNotNull(result)

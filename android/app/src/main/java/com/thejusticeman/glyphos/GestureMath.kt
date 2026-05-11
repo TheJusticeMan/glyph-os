@@ -45,6 +45,7 @@ data class BlendBoundsResult(
 
 const val NUM_POINTS = 40
 const val ANGULAR_THRESHOLD = 0.5
+const val MIN_GESTURE_LENGTH_PX = 200.0
 
 private fun distance(a: Point, b: Point): Double {
   val dx = b.x - a.x
@@ -64,7 +65,7 @@ fun normalizeTo40Points(rawPoints: List<Point>): List<Point>? {
   if (rawPoints.size < 2) return null
 
   val total = totalPathLength(rawPoints)
-  if (total == 0.0) return null
+  if (total < MIN_GESTURE_LENGTH_PX) return null
 
   val interval = total / (NUM_POINTS - 1)
   val resampled = mutableListOf(rawPoints.first().copy())

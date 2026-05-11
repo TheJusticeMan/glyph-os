@@ -45,6 +45,8 @@ private const val HOME_ICON_AREA_BUDGET = 0.42
 private const val HOME_ICON_FOOTPRINT_FACTOR = 1.55
 private const val HOME_ICON_MIN_VISIBLE = 24
 private const val HOME_ICON_MAX_VISIBLE = 64
+private const val HOME_ICON_RESET_SETTLE_PX = 1.5
+private const val HOME_ICON_GHOST_RADIUS_DP = 64
 
 class MainActivity : Activity() {
   private lateinit var settings: AppSettings
@@ -58,6 +60,10 @@ class MainActivity : Activity() {
   private var savedGestures: MutableList<SavedGesture> = mutableListOf()
   private var pendingGesture: PendingGesture? = null
   private var launchCounts: Map<String, Int> = emptyMap()
+  private var homeIconAnchors: Map<String, Point> = emptyMap()
+  private var draggingHomeIconPositions: Map<String, Point> = emptyMap()
+  private var homeIconResetState: HomeIconResetState? = null
+  private var gestureGhostPosition: Point? = null
   private val activeDialogs = mutableSetOf<Dialog>()
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,6 +124,11 @@ class MainActivity : Activity() {
       onIconTapped = ::handleLauncherIconTapped
       onCanvasSizeChanged = { updateLauncherIcons() }
       onIconScaleChanged = { scale -> settings.homeIconScale = scale }
+      onIconPositionChanging = ::handleHomeIconPositionChanging
+      onIconPositionCommitted = ::handleHomeIconPositionCommitted
+      onEditModeChanged = { editing -> showFeedback(if (editing) "Edit mode" else "Edit mode off") }
+      onLauncherIconLayoutSettled = { mainHandler.post { handleHomeIconLayoutSettled() } }
+      onGestureGhostChanged = ::handleGestureGhostChanged
       layoutParams = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -489,31 +500,76 @@ class MainActivity : Activity() {
   private fun showManagementDialog() {
     val dialog = fullScreenDialog()
 
-    val appLabels = cachedAppLabels()
-    val root = screenDialogRoot("Gesture Library")
+    val root = screenDialogRoot("Settings")
+    val scroll = ScrollView(this)
+    val list = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(0, dp(4), 0, dp(12))
+    }
 
-    root.addView(settingsSwitchRow("Trail effect", "Show a fading trail while drawing", settings.trailEffect) { checked ->
+    list.addView(settingsSwitchRow("Trail effect", "Show a fading trail while drawing", settings.trailEffect) { checked ->
       settings.trailEffect = checked
       canvasView.trailEffect = checked
     })
-    root.addView(settingDivider())
-    root.addView(settingsSwitchRow("Open app after create", "Launch a target immediately after assigning it", settings.launchOnCreateShortcut) { checked ->
+    list.addView(settingDivider())
+    list.addView(settingsSwitchRow("Open app after create", "Launch a target immediately after assigning it", settings.launchOnCreateShortcut) { checked ->
       settings.launchOnCreateShortcut = checked
     })
-    root.addView(settingDivider())
-    root.addView(settingsSwitchRow("Match backwards gestures", "Allow the same gesture in reverse", settings.allowBackwardGestures) { checked ->
+    list.addView(settingDivider())
+    list.addView(settingsSwitchRow("Match backwards gestures", "Allow the same gesture in reverse", settings.allowBackwardGestures) { checked ->
       settings.allowBackwardGestures = checked
     })
-    root.addView(settingDivider())
-    root.addView(settingsSwitchRow("Auto-pick only search result", "Choose the app automatically when search leaves one match", settings.autoPickOnlySearchResult) { checked ->
+    list.addView(settingDivider())
+    list.addView(settingsSwitchRow("Auto-pick only search result", "Choose the app automatically when search leaves one match", settings.autoPickOnlySearchResult) { checked ->
       settings.autoPickOnlySearchResult = checked
     })
-    root.addView(settingDivider())
-    root.addView(settingsActionRow("Wallpaper", "Open Android wallpaper and style", onClick = ::openWallpaperChooser))
-    root.addView(settingDivider())
-    root.addView(settingsActionRow("Home app", "Choose the default launcher", onClick = ::openHomeAppSettings))
-    root.addView(settingDivider())
-    root.addView(settingsActionRow("Clear all gestures", "Delete every saved gesture", destructive = true) {
+    list.addView(settingDivider())
+    list.addView(settingsActionRow("Gestures", "Reassign or delete saved gesture bindings") {
+      dialog.dismiss()
+      showGestureLibraryDialog()
+    })
+    list.addView(settingDivider())
+    list.addView(settingsActionRow("Wallpaper", "Open Android wallpaper and style", onClick = ::openWallpaperChooser))
+    list.addView(settingDivider())
+    list.addView(settingsActionRow("Home app", "Choose the default launcher", onClick = ::openHomeAppSettings))
+    list.addView(settingDivider())
+    list.addView(settingsActionRow("Reset layout", "Put frequent apps near the center of the spiral") {
+      dialog.dismiss()
+      beginHomeIconLayoutReset()
+    })
+
+    scroll.addView(list)
+    root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    trackDialog(dialog)
+    dialog.show()
+    expandDialog(dialog)
+  }
+
+  private fun showGestureLibraryDialog() {
+    val dialog = fullScreenDialog()
+
+    val appLabels = cachedAppLabels()
+    val root = screenDialogRoot("Gesture Library")
+
+    val scroll = ScrollView(this)
+    val list = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(0, dp(4), 0, dp(12))
+    }
+
+
+    if (savedGestures.isEmpty()) {
+      list.addView(bodyText("No gestures saved yet.").apply { gravity = Gravity.CENTER })
+    } else {
+      savedGestures.forEach { gesture ->
+        list.addView(gestureRow(gesture, targetLabel(gesture, appLabels), targetSubtitle(gesture), dialog))
+     list.addView(settingDivider())
+     }
+    }
+    list.addView(settingsActionRow("Clear all gestures", "Delete every saved gesture", destructive = true) {
       showConfirmDialog(
         title = "Clear All Gestures",
         message = "This will permanently delete every saved gesture. Continue?",
@@ -522,25 +578,10 @@ class MainActivity : Activity() {
         savedGestures.clear()
         gestureStore.clearGestures()
         dialog.dismiss()
-        showManagementDialog()
+        showGestureLibraryDialog()
         showFeedback("Gestures cleared")
       }
     })
-    root.addView(settingDivider())
-
-    val scroll = ScrollView(this)
-    val list = LinearLayout(this).apply {
-      orientation = LinearLayout.VERTICAL
-      setPadding(0, dp(12), 0, dp(12))
-    }
-
-    if (savedGestures.isEmpty()) {
-      list.addView(bodyText("No gestures saved yet.").apply { gravity = Gravity.CENTER })
-    } else {
-      savedGestures.forEach { gesture ->
-        list.addView(gestureRow(gesture, targetLabel(gesture, appLabels), targetSubtitle(gesture), dialog))
-      }
-    }
     scroll.addView(list)
     root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
@@ -595,7 +636,7 @@ class MainActivity : Activity() {
         }.toMutableList()
         persistGestures()
         ownerDialog.dismiss()
-        showManagementDialog()
+        showGestureLibraryDialog()
         showFeedback("Gesture reassigned")
       }
     })
@@ -608,7 +649,7 @@ class MainActivity : Activity() {
         savedGestures.removeAll { it.label == gesture.label }
         persistGestures()
         ownerDialog.dismiss()
-        showManagementDialog()
+        showGestureLibraryDialog()
         showFeedback("Gesture deleted")
       }
     })
@@ -707,6 +748,7 @@ class MainActivity : Activity() {
 
     val minIconSize = dp(HOME_ICON_MIN_DP).toDouble()
     val maxIconSize = dp(HOME_ICON_MAX_DP).toDouble()
+    val previousIcons = canvasView.launcherIcons
     canvasView.launcherIcons = LauncherIconLayout.build(
       apps = selectHomeApps(apps, minIconSize, maxIconSize),
       launchCounts = launchCounts,
@@ -714,6 +756,10 @@ class MainActivity : Activity() {
       heightPx = canvasView.height,
       minSizePx = minIconSize,
       maxSizePx = maxIconSize,
+      previousNodes = previousIcons,
+      anchorPositions = homeIconAnchors,
+      fixedPositions = fixedHomeIconPositions(),
+      ghostNodes = gestureGhostNodes(),
     )
   }
 
@@ -742,13 +788,210 @@ class MainActivity : Activity() {
       val footprint = iconSize * iconSize * HOME_ICON_FOOTPRINT_FACTOR
       val mustFillStarterSet = selected.size < minimumVisible
       val fitsFrequencySurface = selected.size < adaptiveMaxVisible && usedArea + footprint <= areaBudget
-      if (!mustFillStarterSet && !fitsFrequencySurface) break
+      if (!mustFillStarterSet && !fitsFrequencySurface) continue
 
       selected += app
       usedArea += footprint
     }
 
     return selected
+  }
+
+  private fun handleHomeIconPositionChanging(
+    app: AppDetail,
+    x: Float,
+    y: Float,
+    width: Int,
+    height: Int,
+  ) {
+    homeIconResetState = null
+    val anchor = Point(x.toDouble(), y.toDouble())
+    homeIconAnchors = homeIconAnchors + (app.packageName to anchor)
+    draggingHomeIconPositions = mapOf(app.packageName to anchor)
+    updateLauncherIcons()
+  }
+
+  private fun handleHomeIconPositionCommitted(
+    app: AppDetail,
+    x: Float,
+    y: Float,
+    width: Int,
+    height: Int,
+  ) {
+    homeIconResetState = null
+    homeIconAnchors = homeIconAnchors + (app.packageName to Point(x.toDouble(), y.toDouble()))
+    draggingHomeIconPositions = emptyMap()
+    updateLauncherIcons()
+  }
+
+  private fun fixedHomeIconPositions(): Map<String, Point> {
+    if (!::canvasView.isInitialized || canvasView.width <= 0 || canvasView.height <= 0) return emptyMap()
+    return homeIconResetState?.fixedPositions.orEmpty() + draggingHomeIconPositions
+  }
+
+  private fun gestureGhostNodes(): List<LauncherIconGhostNode> {
+    val position = gestureGhostPosition ?: return emptyList()
+    return listOf(
+      LauncherIconGhostNode(
+        x = position.x,
+        y = position.y,
+        radiusPx = dp(HOME_ICON_GHOST_RADIUS_DP).toDouble(),
+      ),
+    )
+  }
+
+  private fun handleGestureGhostChanged(position: Point?) {
+    if (position != null) homeIconResetState = null
+    if (gestureGhostPosition == position) return
+
+    gestureGhostPosition = position
+    updateLauncherIcons()
+  }
+
+  private fun beginHomeIconLayoutReset() {
+    if (!::canvasView.isInitialized) return
+    if (canvasView.width <= 0 || canvasView.height <= 0) {
+      canvasView.post { beginHomeIconLayoutReset() }
+      return
+    }
+
+    val apps = cachedInstalledApps()
+    val minIconSize = dp(HOME_ICON_MIN_DP).toDouble()
+    val maxIconSize = dp(HOME_ICON_MAX_DP).toDouble()
+    val selectedApps = selectHomeApps(apps, minIconSize, maxIconSize)
+    val steps = buildHomeIconResetSteps(selectedApps, minIconSize, maxIconSize)
+    if (steps.isEmpty()) {
+      showFeedback("No home icons to reset")
+      return
+    }
+
+    homeIconAnchors = emptyMap()
+    draggingHomeIconPositions = emptyMap()
+    canvasView.editMode = false
+    homeIconResetState = HomeIconResetState(steps = steps)
+    showFeedback("Resetting layout")
+    advanceHomeIconResetStep()
+  }
+
+  private fun buildHomeIconResetSteps(
+    selectedApps: List<AppDetail>,
+    minIconSize: Double,
+    maxIconSize: Double,
+  ): List<HomeIconResetStep> {
+    if (selectedApps.isEmpty()) return emptyList()
+
+    val slots = LauncherIconLayout.automaticSlots(
+      apps = selectedApps,
+      launchCounts = launchCounts,
+      widthPx = canvasView.width,
+      heightPx = canvasView.height,
+      minSizePx = minIconSize,
+      maxSizePx = maxIconSize,
+    )
+    val currentByPackage = canvasView.launcherIcons.associateBy { it.app.packageName }
+    val fallbackByPackage = LauncherIconLayout.build(
+      apps = selectedApps,
+      launchCounts = launchCounts,
+      widthPx = canvasView.width,
+      heightPx = canvasView.height,
+      minSizePx = minIconSize,
+      maxSizePx = maxIconSize,
+      iterations = 0,
+    ).associateBy { it.app.packageName }
+    val availableIcons = selectedApps.mapNotNull { app ->
+      currentByPackage[app.packageName] ?: fallbackByPackage[app.packageName]
+    }.toMutableList()
+
+    return slots.mapNotNull { slot ->
+      var nextIcon: LauncherIconNode? = null
+      for (icon in availableIcons) {
+        val currentBest = nextIcon
+        if (currentBest == null || isBetterResetCandidate(icon, currentBest, slot)) {
+          nextIcon = icon
+        }
+      }
+
+      nextIcon ?: return@mapNotNull null
+      availableIcons.remove(nextIcon)
+      HomeIconResetStep(
+        packageName = nextIcon.app.packageName,
+        position = Point(slot.x, slot.y),
+      )
+    }
+  }
+
+  private fun isBetterResetCandidate(
+    candidate: LauncherIconNode,
+    currentBest: LauncherIconNode,
+    slot: LauncherIconSlot,
+  ): Boolean {
+    val candidateCount = launchCounts[candidate.app.packageName]?.coerceAtLeast(0) ?: 0
+    val currentCount = launchCounts[currentBest.app.packageName]?.coerceAtLeast(0) ?: 0
+    if (candidateCount != currentCount) return candidateCount > currentCount
+
+    val candidateDistance = distanceSquared(candidate.x, candidate.y, slot.x, slot.y)
+    val currentDistance = distanceSquared(currentBest.x, currentBest.y, slot.x, slot.y)
+    if (candidateDistance != currentDistance) return candidateDistance < currentDistance
+
+    val candidateLabel = candidate.app.label.lowercase()
+    val currentLabel = currentBest.app.label.lowercase()
+    if (candidateLabel != currentLabel) return candidateLabel < currentLabel
+
+    return candidate.app.packageName < currentBest.app.packageName
+  }
+
+  private fun advanceHomeIconResetStep() {
+    val state = homeIconResetState ?: return
+    if (state.nextIndex >= state.steps.size) {
+      finishHomeIconLayoutReset()
+      return
+    }
+
+    val step = state.steps[state.nextIndex]
+    val fixedPositions = state.fixedPositions + (step.packageName to step.position)
+    homeIconResetState = state.copy(
+      fixedPositions = fixedPositions,
+      activeStep = step,
+    )
+    homeIconAnchors = homeIconAnchors + (step.packageName to step.position)
+    updateLauncherIcons()
+  }
+
+  private fun handleHomeIconLayoutSettled() {
+    val state = homeIconResetState ?: return
+    val activeStep = state.activeStep ?: return
+    val activeIcon = canvasView.launcherIcons.firstOrNull { icon -> icon.app.packageName == activeStep.packageName } ?: return
+    val settleDistanceSquared = HOME_ICON_RESET_SETTLE_PX * HOME_ICON_RESET_SETTLE_PX
+    if (distanceSquared(activeIcon.x, activeIcon.y, activeStep.position.x, activeStep.position.y) > settleDistanceSquared) {
+      return
+    }
+
+    val nextState = state.copy(
+      nextIndex = state.nextIndex + 1,
+      activeStep = null,
+    )
+    homeIconResetState = nextState
+    if (nextState.nextIndex >= nextState.steps.size) {
+      finishHomeIconLayoutReset()
+    } else {
+      advanceHomeIconResetStep()
+    }
+  }
+
+  private fun finishHomeIconLayoutReset() {
+    val finalPositions = homeIconResetState?.fixedPositions.orEmpty()
+    if (finalPositions.isNotEmpty()) {
+      homeIconAnchors = finalPositions
+    }
+    homeIconResetState = null
+    updateLauncherIcons()
+    showFeedback("Layout reset")
+  }
+
+  private fun distanceSquared(leftX: Double, leftY: Double, rightX: Double, rightY: Double): Double {
+    val dx = leftX - rightX
+    val dy = leftY - rightY
+    return dx * dx + dy * dy
   }
 
   private fun targetLabel(
@@ -1047,5 +1290,17 @@ class MainActivity : Activity() {
   private data class PendingGesture(
     val label: String,
     val normalizedPath: List<Point>,
+  )
+
+  private data class HomeIconResetStep(
+    val packageName: String,
+    val position: Point,
+  )
+
+  private data class HomeIconResetState(
+    val steps: List<HomeIconResetStep>,
+    val fixedPositions: Map<String, Point> = emptyMap(),
+    val nextIndex: Int = 0,
+    val activeStep: HomeIconResetStep? = null,
   )
 }

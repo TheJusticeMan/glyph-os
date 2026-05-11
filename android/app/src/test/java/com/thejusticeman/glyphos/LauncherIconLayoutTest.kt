@@ -39,6 +39,200 @@ class LauncherIconLayoutTest {
   }
 
   @Test
+  fun buildKeepsStableOrderWhenLaunchCountsChange() {
+    val apps = sampleApps(10)
+    val initial = LauncherIconLayout.build(apps, emptyMap(), 900, 1400, 44.0, 112.0)
+    val updated = LauncherIconLayout.build(
+      apps = apps,
+      launchCounts = mapOf(apps.last().packageName to 20),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 112.0,
+      previousNodes = initial,
+    )
+
+    assertEquals(
+      initial.map { it.app.packageName },
+      updated.map { it.app.packageName },
+    )
+  }
+
+  @Test
+  fun automaticSlotsStartAtCanvasCenter() {
+    val slots = LauncherIconLayout.automaticSlots(sampleApps(6), emptyMap(), 900, 1400, 44.0, 112.0)
+
+    assertEquals(6, slots.size)
+    assertEquals(0, slots.first().index)
+    assertEquals(450.0, slots.first().x, 0.0001)
+    assertEquals(700.0, slots.first().y, 0.0001)
+  }
+
+  @Test
+  fun buildCanStartFromPreviousPositions() {
+    val app = sampleApps(1).first()
+    val previous = listOf(
+      LauncherIconNode(
+        app = app,
+        launchCount = 0,
+        sizePx = 44.0,
+        radiusPx = 22.0,
+        x = 120.0,
+        y = 340.0,
+      ),
+    )
+
+    val nodes = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = mapOf(app.packageName to 4),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 112.0,
+      previousNodes = previous,
+      iterations = 0,
+    )
+
+    assertEquals(120.0, nodes.single().x, 0.0001)
+    assertEquals(340.0, nodes.single().y, 0.0001)
+  }
+
+  @Test
+  fun previousPositionSeedsButDoesNotReplaceFormationAnchor() {
+    val app = sampleApps(1).first()
+    val previous = listOf(
+      LauncherIconNode(
+        app = app,
+        launchCount = 0,
+        sizePx = 44.0,
+        radiusPx = 22.0,
+        x = 120.0,
+        y = 340.0,
+      ),
+    )
+
+    val nodes = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 112.0,
+      previousNodes = previous,
+    )
+
+    assertTrue(nodes.single().x > 120.0)
+    assertTrue(nodes.single().y > 340.0)
+    assertTrue(nodes.single().x < 450.0)
+    assertTrue(nodes.single().y < 700.0)
+  }
+
+  @Test
+  fun fixedPositionPinsIconDuringLayout() {
+    val apps = sampleApps(8)
+    val pinnedApp = apps[3]
+    val nodes = LauncherIconLayout.build(
+      apps = apps,
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 112.0,
+      fixedPositions = mapOf(pinnedApp.packageName to Point(300.0, 500.0)),
+    )
+
+    val pinnedNode = nodes.first { it.app.packageName == pinnedApp.packageName }
+    assertEquals(300.0, pinnedNode.x, 0.0001)
+    assertEquals(500.0, pinnedNode.y, 0.0001)
+  }
+
+  @Test
+  fun ghostNodePushesIconsWithoutBeingReturned() {
+    val app = sampleApps(1).first()
+    val nodes = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 44.0,
+      ghostNodes = listOf(LauncherIconGhostNode(450.0, 700.0, 80.0)),
+    )
+
+    assertEquals(1, nodes.size)
+    assertEquals(app.packageName, nodes.single().app.packageName)
+    val distanceFromFinger = hypot(nodes.single().x - 450.0, nodes.single().y - 700.0)
+    assertTrue(distanceFromFinger > nodes.single().radiusPx)
+  }
+
+  @Test
+  fun anchorPositionPullsIconWithoutFixingIt() {
+    val app = sampleApps(1).first()
+    val previous = listOf(
+      LauncherIconNode(
+        app = app,
+        launchCount = 0,
+        sizePx = 44.0,
+        radiusPx = 22.0,
+        x = 100.0,
+        y = 100.0,
+      ),
+    )
+
+    val nodes = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 112.0,
+      previousNodes = previous,
+      anchorPositions = mapOf(app.packageName to Point(400.0, 600.0)),
+    )
+
+    assertTrue(nodes.single().x > 100.0)
+    assertTrue(nodes.single().y > 100.0)
+    assertTrue(nodes.single().x < 400.0)
+    assertTrue(nodes.single().y < 600.0)
+  }
+
+  @Test
+  fun closeResetAnchorsSettleApartAfterFixedModeEnds() {
+    val apps = sampleApps(2)
+    val closePositions = mapOf(
+      apps[0].packageName to Point(450.0, 700.0),
+      apps[1].packageName to Point(452.0, 702.0),
+    )
+    val fixedNodes = LauncherIconLayout.build(
+      apps = apps,
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 112.0,
+      anchorPositions = closePositions,
+      fixedPositions = closePositions,
+    )
+
+    val settledNodes = LauncherIconLayout.build(
+      apps = apps,
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 112.0,
+      previousNodes = fixedNodes,
+      anchorPositions = closePositions,
+    )
+
+    val distance = hypot(
+      settledNodes[0].x - settledNodes[1].x,
+      settledNodes[0].y - settledNodes[1].y,
+    )
+    assertTrue(distance >= settledNodes[0].radiusPx + settledNodes[1].radiusPx)
+  }
+
+  @Test
   fun buildKeepsIconsWithinCanvas() {
     val apps = sampleApps(16)
     val counts = apps.withIndex().associate { (index, app) -> app.packageName to index + 1 }

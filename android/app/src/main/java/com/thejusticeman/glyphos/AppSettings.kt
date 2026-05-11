@@ -32,10 +32,10 @@ class AppSettings(context: Context) {
     set(value) = preferences.edit().putBoolean(ALLOW_BACKWARD_GESTURES_KEY, value).apply()
 
   var autoPickOnlySearchResult: Boolean
-    get() = preferences.getBoolean(AUTO_PICK_ONLY_SEARCH_RESULT_KEY, false)
+    get() = preferences.getBoolean(AUTO_PICK_ONLY_SEARCH_RESULT_KEY, true)
     set(value) = preferences.edit().putBoolean(AUTO_PICK_ONLY_SEARCH_RESULT_KEY, value).apply()
 
   var homeIconScale: Float
-    get() = preferences.getFloat(HOME_ICON_SCALE_KEY, 1.0f).coerceIn(HOME_ICON_SCALE_MIN, HOME_ICON_SCALE_MAX)
+    get() = preferences.getFloat(HOME_ICON_SCALE_KEY, 0.0f).coerceIn(HOME_ICON_SCALE_MIN, HOME_ICON_SCALE_MAX)
     set(value) = preferences.edit().putFloat(HOME_ICON_SCALE_KEY, value.coerceIn(HOME_ICON_SCALE_MIN, HOME_ICON_SCALE_MAX)).apply()
 }

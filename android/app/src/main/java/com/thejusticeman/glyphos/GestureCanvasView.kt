@@ -6,25 +6,29 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
-import kotlin.math.floor
+import kotlin.math.abs
 import kotlin.math.hypot
 
-private const val LONG_PRESS_MS = 800L
+private const val LONG_PRESS_MS = 200L
 private const val LONG_PRESS_CANCEL_PX = 10.0
 private const val CLEAR_CANVAS_MS = 400L
-private const val TRAIL_SEGMENTS = 5
-private const val TRAIL_MIN_OPACITY = 0.15
-private const val TRAIL_OPACITY_RANGE = 0.85
-private const val TRAIL_MAX_WIDTH = 7.5
-private const val TRAIL_WIDTH_RANGE = 5.0
+private const val TRAIL_PARTICLE_LIFETIME_MS = 650L
+private const val TRAIL_PARTICLE_MAX_ALPHA = 220
+private const val TRAIL_PARTICLE_RADIUS_DP = 5
 private const val TAP_MAX_MOVEMENT_DP = 12
 private const val LABEL_MIN_ICON_DP = 58
 private const val ICON_SCALE_MIN = 0.0f
 private const val ICON_SCALE_MAX = 1.0f
 private const val MIN_PINCH_DISTANCE_PX = 24f
 private const val PINCH_ICON_SCALE_RESPONSE = 2.0f
+private const val ICON_LAYOUT_ANIMATION_STEP = 0.22
+private const val ICON_LAYOUT_SETTLE_PX = 0.6
+private const val EDIT_FRAME_ALPHA = 190
+private const val EDIT_RING_ALPHA = 170
+private const val EDIT_HALO_ALPHA = 55
 
 class GestureCanvasView(context: Context) : View(context) {
   var onGestureComplete: ((List<Point>) -> Unit)? = null
@@ -32,10 +36,15 @@ class GestureCanvasView(context: Context) : View(context) {
   var onIconTapped: ((AppDetail) -> Unit)? = null
   var onCanvasSizeChanged: (() -> Unit)? = null
   var onIconScaleChanged: ((Float) -> Unit)? = null
-  var launcherIcons: List<LauncherIconNode> = emptyList()
+  var onIconPositionChanging: ((AppDetail, Float, Float, Int, Int) -> Unit)? = null
+  var onIconPositionCommitted: ((AppDetail, Float, Float, Int, Int) -> Unit)? = null
+  var onEditModeChanged: ((Boolean) -> Unit)? = null
+  var onLauncherIconLayoutSettled: (() -> Unit)? = null
+  var onGestureGhostChanged: ((Point?) -> Unit)? = null
+  var launcherIcons: List<LauncherIconNode>
+    get() = displayedLauncherIcons.ifEmpty { targetLauncherIcons }
     set(value) {
-      field = value
-      invalidate()
+      updateLauncherIconTargets(value)
     }
   var iconScale: Float = 1.0f
     set(value) {
@@ -45,10 +54,21 @@ class GestureCanvasView(context: Context) : View(context) {
   var trailEffect: Boolean = false
     set(value) {
       field = value
+      if (!value) trailParticles.clear()
+      invalidate()
+    }
+  var editMode: Boolean = false
+    set(value) {
+      if (field == value) return
+      field = value
+      onEditModeChanged?.invoke(value)
       invalidate()
     }
 
   private val rawPoints = mutableListOf<Point>()
+  private val trailParticles = mutableListOf<TrailParticle>()
+  private var targetLauncherIcons: List<LauncherIconNode> = emptyList()
+  private var displayedLauncherIcons: List<LauncherIconNode> = emptyList()
   private val path = Path()
   private val iconBounds = Rect()
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -68,6 +88,29 @@ class GestureCanvasView(context: Context) : View(context) {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     alpha = 180
   }
+  private val trailParticlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
+    style = Paint.Style.FILL
+  }
+  private val editFramePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
+    alpha = EDIT_FRAME_ALPHA
+    style = Paint.Style.STROKE
+    strokeCap = Paint.Cap.ROUND
+    strokeJoin = Paint.Join.ROUND
+    strokeWidth = dp(3).toFloat()
+  }
+  private val editRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
+    alpha = EDIT_RING_ALPHA
+    style = Paint.Style.STROKE
+    strokeWidth = dp(1).toFloat()
+  }
+  private val editHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
+    alpha = EDIT_HALO_ALPHA
+    style = Paint.Style.FILL
+  }
 
   private var downX = 0f
   private var downY = 0f
@@ -76,11 +119,24 @@ class GestureCanvasView(context: Context) : View(context) {
   private var suppressGestureUntilAllPointersUp = false
   private var pinchStartDistance = 0f
   private var pinchStartScale = 1.0f
+  private var pressedIcon: LauncherIconNode? = null
+  private var draggingPackageName: String? = null
+  private var dragOffsetX = 0.0
+  private var dragOffsetY = 0.0
+  private var draggedDuringEdit = false
+  private var launcherIconSettleCallbackPending = false
+  private var gestureGhostActive = false
 
   private val longPressRunnable = Runnable {
     longPressTriggered = true
     clearNow()
-    onLongPressOpenManagement?.invoke()
+    val icon = pressedIcon
+    if (icon == null || iconScale <= 0f) {
+      onLongPressOpenManagement?.invoke()
+    } else {
+      editMode = true
+      beginIconDrag(icon, downX, downY)
+    }
   }
 
   init {
@@ -97,9 +153,18 @@ class GestureCanvasView(context: Context) : View(context) {
         suppressGestureUntilAllPointersUp = false
         downX = event.x
         downY = event.y
+        pressedIcon = hitTestIcon(event.x, event.y)
+        if (editMode) {
+          rawPoints.clear()
+          path.reset()
+          clearGestureGhost()
+          pressedIcon?.let { icon -> beginIconDrag(icon, event.x, event.y) }
+          invalidate()
+          return true
+        }
         rawPoints.clear()
         path.reset()
-        rawPoints += Point(event.x.toDouble(), event.y.toDouble())
+        addGesturePoint(event.x, event.y, event.eventTime, updateGhost = false)
         path.moveTo(event.x, event.y)
         postDelayed(longPressRunnable, LONG_PRESS_MS)
         invalidate()
@@ -114,6 +179,11 @@ class GestureCanvasView(context: Context) : View(context) {
       }
 
       MotionEvent.ACTION_MOVE -> {
+        if (draggingPackageName != null) {
+          updateIconDrag(event.x, event.y)
+          return true
+        }
+
         if (pinching) {
           updatePinch(event)
           return true
@@ -136,13 +206,16 @@ class GestureCanvasView(context: Context) : View(context) {
           removeCallbacks(longPressRunnable)
         }
 
-        rawPoints += Point(event.x.toDouble(), event.y.toDouble())
+        addGesturePoint(event.x, event.y, event.eventTime, updateGhost = !isTap(event.x, event.y))
         path.lineTo(event.x, event.y)
         invalidate()
         return true
       }
 
       MotionEvent.ACTION_POINTER_UP -> {
+        if (draggingPackageName != null) {
+          finishIconDrag(commit = true)
+        }
         if (pinching && event.pointerCount <= 2) {
           finishPinch()
         }
@@ -151,6 +224,11 @@ class GestureCanvasView(context: Context) : View(context) {
 
       MotionEvent.ACTION_UP -> {
         removeCallbacks(longPressRunnable)
+        if (draggingPackageName != null) {
+          finishIconDrag(commit = true)
+          return true
+        }
+
         if (pinching) {
           finishPinch()
           suppressGestureUntilAllPointersUp = false
@@ -169,14 +247,23 @@ class GestureCanvasView(context: Context) : View(context) {
           return true
         }
 
+        if (editMode) {
+          if (pressedIcon == null && isTap(event.x, event.y)) {
+            editMode = false
+          }
+          clearNow()
+          return true
+        }
+
         if (isTap(event.x, event.y)) {
-          hitTestIcon(event.x, event.y)?.let { icon ->
+          (pressedIcon ?: hitTestIcon(event.x, event.y))?.let { icon ->
             clearNow()
             onIconTapped?.invoke(icon.app)
             return true
           }
         }
 
+        clearGestureGhost()
         normalizeTo40Points(rawPoints)?.let { onGestureComplete?.invoke(it) }
         postDelayed({ clearNow() }, CLEAR_CANVAS_MS)
         return true
@@ -187,6 +274,7 @@ class GestureCanvasView(context: Context) : View(context) {
         longPressTriggered = false
         pinching = false
         suppressGestureUntilAllPointersUp = false
+        finishIconDrag(commit = false)
         clearNow()
         return true
       }
@@ -196,7 +284,9 @@ class GestureCanvasView(context: Context) : View(context) {
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
+    advanceLauncherIconAnimation()
     drawLauncherIcons(canvas)
+    if (editMode) drawEditModeOverlay(canvas)
     if (trailEffect) {
       drawTrail(canvas)
     } else {
@@ -214,7 +304,97 @@ class GestureCanvasView(context: Context) : View(context) {
   private fun clearNow() {
     rawPoints.clear()
     path.reset()
+    clearGestureGhost()
     invalidate()
+  }
+
+  private fun addGesturePoint(x: Float, y: Float, eventTimeMs: Long, updateGhost: Boolean) {
+    rawPoints += Point(x.toDouble(), y.toDouble())
+    if (updateGhost) {
+      gestureGhostActive = true
+      onGestureGhostChanged?.invoke(Point(x.toDouble(), y.toDouble()))
+    }
+    if (trailEffect) {
+      trailParticles += TrailParticle(x = x, y = y, createdAtMs = eventTimeMs)
+    }
+  }
+
+  private fun clearGestureGhost() {
+    if (!gestureGhostActive) return
+    gestureGhostActive = false
+    onGestureGhostChanged?.invoke(null)
+  }
+
+  private fun updateLauncherIconTargets(icons: List<LauncherIconNode>) {
+    targetLauncherIcons = icons
+    launcherIconSettleCallbackPending = true
+
+    if (icons.isEmpty()) {
+      displayedLauncherIcons = emptyList()
+      invalidate()
+      notifyLauncherIconLayoutSettled()
+      return
+    }
+
+    if (displayedLauncherIcons.isEmpty()) {
+      displayedLauncherIcons = icons
+      invalidate()
+      notifyLauncherIconLayoutSettled()
+      return
+    }
+
+    val currentByPackage = displayedLauncherIcons.associateBy { it.app.packageName }
+    displayedLauncherIcons = icons.map { target ->
+      currentByPackage[target.app.packageName]?.let { current ->
+        target.copy(
+          sizePx = current.sizePx,
+          radiusPx = current.radiusPx,
+          x = current.x,
+          y = current.y,
+        )
+      } ?: target
+    }
+    postInvalidateOnAnimation()
+  }
+
+  private fun advanceLauncherIconAnimation() {
+    if (displayedLauncherIcons.isEmpty() || targetLauncherIcons.isEmpty()) return
+
+    val currentByPackage = displayedLauncherIcons.associateBy { it.app.packageName }
+    var settled = true
+    displayedLauncherIcons = targetLauncherIcons.map { target ->
+      val current = currentByPackage[target.app.packageName] ?: return@map target.also { settled = false }
+      val nextX = approach(current.x, target.x)
+      val nextY = approach(current.y, target.y)
+      val nextSize = approach(current.sizePx, target.sizePx)
+      val nextRadius = nextSize / 2.0
+      if (
+        abs(nextX - target.x) > ICON_LAYOUT_SETTLE_PX ||
+        abs(nextY - target.y) > ICON_LAYOUT_SETTLE_PX ||
+        abs(nextSize - target.sizePx) > ICON_LAYOUT_SETTLE_PX
+      ) {
+        settled = false
+      }
+      target.copy(x = nextX, y = nextY, sizePx = nextSize, radiusPx = nextRadius)
+    }
+
+    if (settled) {
+      displayedLauncherIcons = targetLauncherIcons
+      notifyLauncherIconLayoutSettled()
+    } else {
+      postInvalidateOnAnimation()
+    }
+  }
+
+  private fun notifyLauncherIconLayoutSettled() {
+    if (!launcherIconSettleCallbackPending) return
+    launcherIconSettleCallbackPending = false
+    onLauncherIconLayoutSettled?.invoke()
+  }
+
+  private fun approach(current: Double, target: Double): Double {
+    val next = current + (target - current) * ICON_LAYOUT_ANIMATION_STEP
+    return if (abs(next - target) <= ICON_LAYOUT_SETTLE_PX) target else next
   }
 
   private fun isTap(x: Float, y: Float): Boolean {
@@ -223,7 +403,7 @@ class GestureCanvasView(context: Context) : View(context) {
   }
 
   private fun hitTestIcon(x: Float, y: Float): LauncherIconNode? {
-    for (icon in launcherIcons.asReversed()) {
+    for (icon in displayedLauncherIcons.asReversed()) {
       val dx = x - icon.x.toFloat()
       val dy = y - icon.y.toFloat()
       if (hypot(dx.toDouble(), dy.toDouble()) <= icon.radiusPx * iconScale) {
@@ -231,6 +411,48 @@ class GestureCanvasView(context: Context) : View(context) {
       }
     }
     return null
+  }
+
+  private fun beginIconDrag(icon: LauncherIconNode, touchX: Float, touchY: Float) {
+    removeCallbacks(longPressRunnable)
+    draggingPackageName = icon.app.packageName
+    dragOffsetX = icon.x - touchX
+    dragOffsetY = icon.y - touchY
+    draggedDuringEdit = false
+    rawPoints.clear()
+    path.reset()
+    invalidate()
+  }
+
+  private fun updateIconDrag(touchX: Float, touchY: Float) {
+    val packageName = draggingPackageName ?: return
+    val current = displayedLauncherIcons.firstOrNull { it.app.packageName == packageName } ?: return
+    val nextX = (touchX + dragOffsetX).coerceIn(current.radiusPx, width - current.radiusPx)
+    val nextY = (touchY + dragOffsetY).coerceIn(current.radiusPx, height - current.radiusPx)
+    draggedDuringEdit = true
+    moveDisplayedIcon(packageName, nextX, nextY)
+    onIconPositionChanging?.invoke(current.app, nextX.toFloat(), nextY.toFloat(), width, height)
+    invalidate()
+  }
+
+  private fun finishIconDrag(commit: Boolean) {
+    val packageName = draggingPackageName ?: return
+    val current = displayedLauncherIcons.firstOrNull { it.app.packageName == packageName }
+    draggingPackageName = null
+    if (commit && current != null && draggedDuringEdit) {
+      onIconPositionCommitted?.invoke(current.app, current.x.toFloat(), current.y.toFloat(), width, height)
+    }
+    draggedDuringEdit = false
+    clearNow()
+  }
+
+  private fun moveDisplayedIcon(packageName: String, x: Double, y: Double) {
+    displayedLauncherIcons = displayedLauncherIcons.map { icon ->
+      if (icon.app.packageName == packageName) icon.copy(x = x, y = y) else icon
+    }
+    targetLauncherIcons = targetLauncherIcons.map { icon ->
+      if (icon.app.packageName == packageName) icon.copy(x = x, y = y) else icon
+    }
   }
 
   private fun beginPinch(event: MotionEvent) {
@@ -271,7 +493,7 @@ class GestureCanvasView(context: Context) : View(context) {
   }
 
   private fun drawLauncherIcons(canvas: Canvas) {
-    for (icon in launcherIcons) {
+    for (icon in displayedLauncherIcons) {
       val scaledSize = icon.sizePx * iconScale
       if (scaledSize < 1.0) continue
 
@@ -309,38 +531,69 @@ class GestureCanvasView(context: Context) : View(context) {
     canvas.drawText(visibleLabel, icon.x.toFloat(), baseline, labelPaint)
   }
 
-  private fun drawTrail(canvas: Canvas) {
-    if (rawPoints.size < 2) return
+  private fun drawEditModeOverlay(canvas: Canvas) {
+    drawEditFrame(canvas)
+    drawEditIconRings(canvas)
+  }
 
-    val originalAlpha = paint.alpha
-    val originalWidth = paint.strokeWidth
-    val count = rawPoints.size
+  private fun drawEditFrame(canvas: Canvas) {
+    val inset = dp(10).toFloat()
+    val corner = dp(34).toFloat()
+    val left = inset
+    val top = inset
+    val right = width - inset
+    val bottom = height - inset
 
-    for (segment in 0 until TRAIL_SEGMENTS) {
-      val startIndex = floor(segment * (count - 1).toDouble() / TRAIL_SEGMENTS).toInt()
-      val endIndex = minOf(
-        count - 1,
-        floor((segment + 1) * (count - 1).toDouble() / TRAIL_SEGMENTS).toInt(),
-      )
-      if (endIndex <= startIndex) continue
+    canvas.drawLine(left, top, left + corner, top, editFramePaint)
+    canvas.drawLine(left, top, left, top + corner, editFramePaint)
+    canvas.drawLine(right, top, right - corner, top, editFramePaint)
+    canvas.drawLine(right, top, right, top + corner, editFramePaint)
+    canvas.drawLine(left, bottom, left + corner, bottom, editFramePaint)
+    canvas.drawLine(left, bottom, left, bottom - corner, editFramePaint)
+    canvas.drawLine(right, bottom, right - corner, bottom, editFramePaint)
+    canvas.drawLine(right, bottom, right, bottom - corner, editFramePaint)
+  }
 
-      val t = segment.toDouble() / (TRAIL_SEGMENTS - 1)
-      paint.alpha = ((TRAIL_MIN_OPACITY + t * TRAIL_OPACITY_RANGE) * 255).toInt()
-      paint.strokeWidth = (TRAIL_MAX_WIDTH - t * TRAIL_WIDTH_RANGE).toFloat()
+  private fun drawEditIconRings(canvas: Canvas) {
+    for (icon in displayedLauncherIcons) {
+      val scaledRadius = icon.radiusPx * iconScale
+      if (scaledRadius < 1.0) continue
 
-      val segmentPath = Path()
-      val first = rawPoints[startIndex]
-      segmentPath.moveTo(first.x.toFloat(), first.y.toFloat())
-      for (index in startIndex + 1..endIndex) {
-        val point = rawPoints[index]
-        segmentPath.lineTo(point.x.toFloat(), point.y.toFloat())
+      val isDragging = icon.app.packageName == draggingPackageName
+      val ringRadius = (scaledRadius + dp(if (isDragging) 8 else 5)).toFloat()
+      if (isDragging) {
+        canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), ringRadius + dp(4), editHaloPaint)
       }
-      canvas.drawPath(segmentPath, paint)
+      editRingPaint.strokeWidth = dp(if (isDragging) 3 else 1).toFloat()
+      canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), ringRadius, editRingPaint)
+      canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), dp(if (isDragging) 4 else 2).toFloat(), editFramePaint)
+    }
+  }
+
+  private fun drawTrail(canvas: Canvas) {
+    if (trailParticles.isEmpty()) return
+
+    val now = SystemClock.uptimeMillis()
+    trailParticles.removeAll { particle -> now - particle.createdAtMs >= TRAIL_PARTICLE_LIFETIME_MS }
+    val baseRadius = dp(TRAIL_PARTICLE_RADIUS_DP).toFloat()
+
+    for (particle in trailParticles) {
+      val age = (now - particle.createdAtMs).coerceAtLeast(0L)
+      val life = 1f - (age.toFloat() / TRAIL_PARTICLE_LIFETIME_MS).coerceIn(0f, 1f)
+      trailParticlePaint.alpha = (TRAIL_PARTICLE_MAX_ALPHA * life).toInt()
+      canvas.drawCircle(particle.x, particle.y, baseRadius * (0.35f + life * 0.65f), trailParticlePaint)
     }
 
-    paint.alpha = originalAlpha
-    paint.strokeWidth = originalWidth
+    if (trailParticles.isNotEmpty()) {
+      postInvalidateOnAnimation()
+    }
   }
 
   private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+  private data class TrailParticle(
+    val x: Float,
+    val y: Float,
+    val createdAtMs: Long,
+  )
 }

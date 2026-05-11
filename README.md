@@ -28,6 +28,8 @@ PATH=$HOME/Android/Sdk/platform-tools:$PATH \
 ./android/gradlew -p android :app:testDebugUnitTest
 ```
 
+Home screen icon positioning is documented in [docs/home-icon-layout.md](docs/home-icon-layout.md).
+
 ## Legacy React Native App
 
 The previous Expo/React Native implementation has been moved to:
