@@ -45,6 +45,7 @@ Gesture constants:
 ```txt
 NUM_POINTS = 40
 ANGULAR_THRESHOLD = 0.5 radians
+GESTURE_ADAPTATION_RATE = 0.05
 ```
 
 `0.5` radians is about `28.6479` degrees. The threshold check is strict: a score must be `< 0.5`, not `<= 0.5`.
@@ -387,6 +388,38 @@ t = 0 -> old path
 t = 1 -> new path
 t = 0.5 -> midpoint between old and new path coordinates
 ```
+
+## Adaptive Gesture Updates
+
+Every successful gesture use nudges the matched saved gesture toward the normalized path the user just drew.
+
+The adaptation amount is:
+
+```txt
+GESTURE_ADAPTATION_RATE = 0.05
+```
+
+The update uses the same point-by-point linear interpolation as path blending:
+
+```txt
+adaptedPath = blendNormalizedPaths(savedPath, usedPath, 0.05)
+```
+
+If backward gestures are enabled and the used path matches the saved path better in reverse, the used path is reversed before blending so the saved gesture keeps a stable point order:
+
+```txt
+forwardDifference = calculateDifference(usedPath, savedPath)
+backwardDifference = calculateDifference(usedPath, reverse(savedPath))
+
+if backwardDifference < forwardDifference:
+    alignedUsedPath = reverse(usedPath)
+else:
+    alignedUsedPath = usedPath
+
+adaptedPath = blendNormalizedPaths(savedPath, alignedUsedPath, 0.05)
+```
+
+The adapted path replaces the saved gesture and is persisted only after the gesture actually opens an app or executes a special function.
 
 ## Threshold Helper
 

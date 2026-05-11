@@ -25,6 +25,7 @@ data class SavedGesture(
 data class MatchResult(
   val gesture: SavedGesture,
   val angularDifference: Double,
+  val gestureIndex: Int,
 )
 
 data class SimilarAppMatch(
@@ -46,6 +47,8 @@ data class BlendBoundsResult(
 const val NUM_POINTS = 40
 const val ANGULAR_THRESHOLD = 0.5
 const val MIN_GESTURE_LENGTH_PX = 200.0
+const val GESTURE_ADAPTATION_RATE = 0.05
+const val GOOGLE_APP_PACKAGE_NAME = "com.google.android.googlequicksearchbox"
 
 private fun distance(a: Point, b: Point): Double {
   val dx = b.x - a.x
@@ -144,7 +147,7 @@ fun matchGesture(
   var best: MatchResult? = null
   var minDifference = Double.POSITIVE_INFINITY
 
-  for (gesture in savedGestures) {
+  for ((index, gesture) in savedGestures.withIndex()) {
     if (gesture.normalizedPath.size < 2) continue
 
     val difference = calculateBestDirectionDifference(
@@ -154,7 +157,7 @@ fun matchGesture(
     )
     if (difference < minDifference) {
       minDifference = difference
-      best = MatchResult(gesture, difference)
+      best = MatchResult(gesture, difference, index)
     }
   }
 
@@ -220,14 +223,36 @@ fun rankSimilarTargets(
 }
 
 fun defaultOpenAppListGesture(): SavedGesture {
-  val path = List(NUM_POINTS) { index ->
-    Point(x = index * 240.0 / (NUM_POINTS - 1), y = 0.0)
-  }
+  val path = upwardLinePath()
   return SavedGesture(
     label = "Open app list",
     specialActionId = SPECIAL_ACTION_OPEN_APP_LIST,
     normalizedPath = path,
   )
+}
+
+fun defaultOpenGoogleGesture(): SavedGesture {
+  val path = horizontalLinePath()
+  return SavedGesture(
+    label = "Open Google",
+    packageName = GOOGLE_APP_PACKAGE_NAME,
+    normalizedPath = path,
+  )
+}
+
+fun defaultHorizontalLineGesturePath(): List<Point> = horizontalLinePath()
+
+private fun horizontalLinePath(): List<Point> {
+  return List(NUM_POINTS) { index ->
+    Point(x = index * 240.0 / (NUM_POINTS - 1), y = 0.0)
+  }
+}
+
+private fun upwardLinePath(): List<Point> {
+  val path = List(NUM_POINTS) { index ->
+    Point(x = 0.0, y = -index * 240.0 / (NUM_POINTS - 1))
+  }
+  return path
 }
 
 fun blendNormalizedPaths(lineA: List<Point>, lineB: List<Point>, t: Double): List<Point> {
@@ -241,6 +266,25 @@ fun blendNormalizedPaths(lineA: List<Point>, lineB: List<Point>, t: Double): Lis
       y = lineA[index].y * (1 - clamped) + lineB[index].y * clamped,
     )
   }
+}
+
+fun adaptNormalizedPath(
+  savedPath: List<Point>,
+  usedPath: List<Point>,
+  amount: Double = GESTURE_ADAPTATION_RATE,
+  allowBackward: Boolean = false,
+): List<Point> {
+  if (savedPath.size < 2 || usedPath.size != savedPath.size) return savedPath
+
+  val alignedUsedPath = if (allowBackward) {
+    val forwardDifference = calculateDifference(usedPath, savedPath)
+    val backwardDifference = calculateDifference(usedPath, savedPath.asReversed())
+    if (backwardDifference < forwardDifference) usedPath.asReversed() else usedPath
+  } else {
+    usedPath
+  }
+
+  return blendNormalizedPaths(savedPath, alignedUsedPath, amount).takeIf { it.size == savedPath.size } ?: savedPath
 }
 
 fun isWithinThreshold(

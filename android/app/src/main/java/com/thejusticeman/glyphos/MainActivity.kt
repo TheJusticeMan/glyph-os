@@ -80,7 +80,7 @@ class MainActivity : Activity() {
     launchUsageStore = LaunchUsageStore(this)
     launchCounts = launchUsageStore.getLaunchCounts()
     savedGestures = gestureStore.loadGestures().toMutableList()
-    seedDefaultOpenListGestureIfNeeded()
+    seedDefaultGesturesIfNeeded()
 
     setContentView(buildRootView())
     updateLauncherIcons()
@@ -147,7 +147,10 @@ class MainActivity : Activity() {
     )
 
     if (match != null) {
-      executeGesture(match.gesture)
+      val executed = executeGesture(match.gesture)
+      if (executed) {
+        adaptMatchedGesture(match.gestureIndex, normalizedPoints)
+      }
       return
     }
 
@@ -230,24 +233,45 @@ class MainActivity : Activity() {
     }
   }
 
-  private fun executeGesture(gesture: SavedGesture) {
-    when {
+  private fun executeGesture(gesture: SavedGesture): Boolean {
+    return when {
       gesture.specialActionId != null -> executeSpecialFunction(gesture.specialActionId)
       gesture.packageName != null -> {
         val launched = launchAppPackage(gesture.packageName)
         if (!launched) showFeedback("Launch failed")
+        launched
       }
       else -> {
         requestAssignApp(gesture.label, gesture.normalizedPath)
         showFeedback("Assign an app to this gesture")
+        false
       }
     }
   }
 
-  private fun executeSpecialFunction(actionId: String?) {
-    when (actionId) {
-      SPECIAL_ACTION_OPEN_APP_LIST -> showLaunchListDialog()
-      else -> showFeedback("Special function unavailable")
+  private fun adaptMatchedGesture(gestureIndex: Int, normalizedPoints: List<Point>) {
+    val gesture = savedGestures.getOrNull(gestureIndex) ?: return
+    val adaptedPath = adaptNormalizedPath(
+      savedPath = gesture.normalizedPath,
+      usedPath = normalizedPoints,
+      allowBackward = settings.allowBackwardGestures,
+    )
+    if (adaptedPath == gesture.normalizedPath) return
+
+    savedGestures[gestureIndex] = gesture.copy(normalizedPath = adaptedPath)
+    persistGestures()
+  }
+
+  private fun executeSpecialFunction(actionId: String?): Boolean {
+    return when (actionId) {
+      SPECIAL_ACTION_OPEN_APP_LIST -> {
+        showLaunchListDialog()
+        true
+      }
+      else -> {
+        showFeedback("Special function unavailable")
+        false
+      }
     }
   }
 
@@ -659,7 +683,7 @@ class MainActivity : Activity() {
   private fun showOnboardingDialog() {
     val dialog = Dialog(this)
     val root = compactDialogRoot("GlyphOS")
-    root.addView(bodyText("Draw a straight line to open the app list. Draw any other gesture to assign or launch an app. Long press the screen to manage gestures."))
+    root.addView(bodyText("Swipe up to open the app list. Draw a sideways line to open Google. Draw any other gesture to assign or launch an app. Long press the screen to manage gestures."))
     root.addView(primaryButton("Start") {
       settings.onboardingDone = true
       dialog.dismiss()
@@ -695,10 +719,49 @@ class MainActivity : Activity() {
     }
   }
 
-  private fun seedDefaultOpenListGestureIfNeeded() {
-    val alreadyExists = savedGestures.any { it.specialActionId == SPECIAL_ACTION_OPEN_APP_LIST }
-    if (!alreadyExists) {
+  private fun seedDefaultGesturesIfNeeded() {
+    var changed = false
+    val horizontalPath = defaultHorizontalLineGesturePath()
+    var hasOpenListGesture = false
+
+    savedGestures = savedGestures.map { gesture ->
+      if (gesture.specialActionId == SPECIAL_ACTION_OPEN_APP_LIST) {
+        hasOpenListGesture = true
+        val looksLikeOldHorizontalDefault = calculateBestDirectionDifference(
+          gesture.normalizedPath,
+          horizontalPath,
+          allowBackward = true,
+        ) < ANGULAR_THRESHOLD
+        if (looksLikeOldHorizontalDefault) {
+          changed = true
+          defaultOpenAppListGesture()
+        } else {
+          gesture
+        }
+      } else {
+        gesture
+      }
+    }.toMutableList()
+
+    if (!hasOpenListGesture) {
       savedGestures += defaultOpenAppListGesture()
+      changed = true
+    }
+
+    val hasHorizontalGoogleGesture = savedGestures.any { gesture ->
+      gesture.packageName == GOOGLE_APP_PACKAGE_NAME &&
+        calculateBestDirectionDifference(
+          gesture.normalizedPath,
+          horizontalPath,
+          allowBackward = true,
+        ) < ANGULAR_THRESHOLD
+    }
+    if (!hasHorizontalGoogleGesture) {
+      savedGestures += defaultOpenGoogleGesture()
+      changed = true
+    }
+
+    if (changed) {
       persistGestures()
     }
   }

@@ -78,17 +78,55 @@ class GestureMathTest {
   }
 
   @Test
-  fun defaultOpenAppListGestureMatchesStraightLines() {
+  fun adaptNormalizedPathMovesFivePercentTowardUsedGesture() {
+    val saved = straightLinePoints()
+    val used = saved.map { Point(it.x + 40.0, it.y + 80.0) }
+    val adapted = adaptNormalizedPath(saved, used)
+
+    assertEquals(saved.size, adapted.size)
+    assertEquals(saved[0].x + 2.0, adapted[0].x, 0.000001)
+    assertEquals(saved[0].y + 4.0, adapted[0].y, 0.000001)
+    assertEquals(saved.last().x + 2.0, adapted.last().x, 0.000001)
+    assertEquals(saved.last().y + 4.0, adapted.last().y, 0.000001)
+  }
+
+  @Test
+  fun adaptNormalizedPathAlignsBackwardGesturesWhenAllowed() {
+    val saved = List(NUM_POINTS) { index ->
+      val progress = index.toDouble() / (NUM_POINTS - 1)
+      Point(x = progress * 120.0, y = progress * progress * 80.0)
+    }
+    val usedBackward = saved.asReversed()
+    val adapted = adaptNormalizedPath(saved, usedBackward, allowBackward = true)
+
+    assertEquals(saved.size, adapted.size)
+    for (index in saved.indices) {
+      assertEquals(saved[index].x, adapted[index].x, 0.000001)
+      assertEquals(saved[index].y, adapted[index].y, 0.000001)
+    }
+  }
+
+  @Test
+  fun defaultOpenAppListGestureMatchesSwipeUp() {
     val defaultGesture = defaultOpenAppListGesture()
-    val candidate = straightLinePoints(length = 320.0)
+    val candidate = upwardLinePoints(length = 320.0)
 
     assertEquals(SPECIAL_ACTION_OPEN_APP_LIST, defaultGesture.specialActionId)
     assertNotNull(matchGesture(candidate, listOf(defaultGesture), allowBackward = true))
   }
 
   @Test
+  fun defaultOpenGoogleGestureMatchesSidewaysLines() {
+    val defaultGesture = defaultOpenGoogleGesture()
+    val candidate = straightLinePoints(length = 320.0)
+
+    assertEquals(GOOGLE_APP_PACKAGE_NAME, defaultGesture.packageName)
+    assertNotNull(matchGesture(candidate, listOf(defaultGesture), allowBackward = true))
+  }
+
+  @Test
   fun rankSimilarTargetsIncludesSpecialFunctions() {
-    val candidate = straightLinePoints()
+    val candidate = upwardLinePoints()
     val ranked = rankSimilarTargets(
       candidate,
       listOf(defaultOpenAppListGesture()),
@@ -106,6 +144,10 @@ class GestureMathTest {
 
   private fun straightLinePoints(length: Double = 100.0): List<Point> {
     return List(NUM_POINTS) { index -> Point(index * length / (NUM_POINTS - 1), 0.0) }
+  }
+
+  private fun upwardLinePoints(length: Double = 100.0): List<Point> {
+    return List(NUM_POINTS) { index -> Point(0.0, -index * length / (NUM_POINTS - 1)) }
   }
 
   private fun distance(a: Point, b: Point): Double {
