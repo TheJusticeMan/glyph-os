@@ -23,4 +23,8 @@ class LaunchUsageStore(context: Context) {
     preferences.edit().putInt(packageName, nextCount).apply()
     return nextCount
   }
+
+  fun reset(packageName: String) {
+    preferences.edit().remove(packageName).apply()
+  }
 }

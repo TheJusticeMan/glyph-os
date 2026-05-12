@@ -1,6 +1,6 @@
 # GlyphOS
 
-GlyphOS is a native Android Kotlin launcher built around gestures and a dynamic home canvas. Draw gestures to open apps, swipe up to open the app list, draw a sideways line to open Google, pinch to hide or reveal home icons, and long-press icons to rearrange the launcher surface.
+GlyphOS is a native Android Kotlin launcher built around gestures and a dynamic home canvas. Draw gestures to open apps, swipe up to open the app list, draw a sideways line to open Google, pinch to hide or reveal home icons, and long-press the home screen to edit the launcher surface.
 
 The active app lives in `android/`. The older Expo/React Native version has been archived in `legacy/react-native/`.
 
@@ -14,8 +14,11 @@ The active app lives in `android/`. The older Expo/React Native version has been
 - Native app picker: full-screen searchable app list with keyboard support and package-name fallback search.
 - Dynamic home icons: launch frequency grows app icons, and the layout uses repulsion so icons spread around each other.
 - Pinch visibility: two-finger pinch scales home icons down to fully hidden and persists that scale.
-- Edit mode: long-press an icon to drag it; the dragged icon updates its anchor while nearby icons float around it.
-- Settings screens: long-press empty space for scrollable Settings; gesture bindings live in a separate Gesture Library screen.
+- Edit mode: long-press the home screen, app icons, or widgets to edit the launcher surface.
+- Edit-mode settings buttons: open Settings, the Gesture Library, or the widget picker while edit mode is active.
+- Widget resize handles: focused widgets show corner handles in edit mode and can resize from any corner.
+- Trash drop target: dragging shows a trash target; drop widgets there to remove them, or app icons there to reset their launch count.
+- Widget picker: add widgets from an in-app picker grouped by app, with previews when available.
 - Native Android implementation: Kotlin Activity and custom Views, with no React Native runtime in the active app.
 
 ## Requirements
@@ -86,9 +89,13 @@ Tap a home icon to open that app. Launching an app through GlyphOS increments it
 
 Pinch with two fingers to scale home icons. A strong inward pinch can hide them completely; pinch outward to bring them back.
 
-Long-press an app icon to enter edit mode and drag it. The dragged icon updates its anchor when released, while the other icons float around and settle through the repulsion layout.
+Long-press the home screen to enter edit mode. Long-pressing an app icon enters edit mode and starts dragging it; the dragged icon updates its anchor when released, while the other icons float around and settle through the repulsion layout.
 
-Long-press empty space to open Settings. Settings contains global launcher controls and a `Gestures` row that opens the Gesture Library for reassigning or deleting gesture bindings.
+In edit mode, use the bottom buttons to open Settings, the Gesture Library, or the widget picker. Settings contains global launcher controls and a `Gestures` row for the same gesture management screen.
+
+Tap or long-press a widget in edit mode to focus it. Focused widgets show corner handles; drag any corner handle to resize the widget from that corner.
+
+While dragging an app icon or widget, a trash target appears above the edit buttons. Dropping a widget on it removes that widget. Dropping an app icon on it resets that app's launch count, which lets the icon shrink back toward the default size.
 
 ## Project Layout
 

@@ -2,12 +2,16 @@ package com.thejusticeman.glyphos
 
 import android.app.Activity
 import android.app.Dialog
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -37,6 +41,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.util.concurrent.Executors
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private const val HOME_ICON_MIN_DP = 44
@@ -47,6 +52,10 @@ private const val HOME_ICON_MIN_VISIBLE = 24
 private const val HOME_ICON_MAX_VISIBLE = 64
 private const val HOME_ICON_RESET_SETTLE_PX = 1.5
 private const val HOME_ICON_GHOST_RADIUS_DP = 64
+private const val WIDGET_HOST_ID = 1001
+private const val REQUEST_PICK_WIDGET = 2001
+private const val REQUEST_CREATE_WIDGET = 2002
+private const val REQUEST_BIND_WIDGET = 2003
 
 class MainActivity : Activity() {
   private lateinit var settings: AppSettings
@@ -54,17 +63,31 @@ class MainActivity : Activity() {
   private lateinit var installedApps: InstalledApps
   private lateinit var launchUsageStore: LaunchUsageStore
   private lateinit var canvasView: GestureCanvasView
+  private lateinit var widgetStore: WidgetStore
+  private lateinit var widgetHost: AppWidgetHost
+  private lateinit var widgetLayerView: WidgetLayerView
+  private lateinit var bottomSettingsBar: View
+  private lateinit var trashDropTargetView: TextView
   private val mainHandler = Handler(Looper.getMainLooper())
   private val appRefreshExecutor = Executors.newSingleThreadExecutor()
 
   private var savedGestures: MutableList<SavedGesture> = mutableListOf()
   private var pendingGesture: PendingGesture? = null
   private var launchCounts: Map<String, Int> = emptyMap()
+  private var settledHomeIconAnchors: Map<String, Point> = emptyMap()
   private var homeIconAnchors: Map<String, Point> = emptyMap()
   private var draggingHomeIconPositions: Map<String, Point> = emptyMap()
   private var homeIconResetState: HomeIconResetState? = null
   private var gestureGhostPosition: Point? = null
+  private var widgetPlacements: MutableMap<Int, WidgetPlacement> = mutableMapOf()
+  private var pendingWidgetAllocationId: Int? = null
   private val activeDialogs = mutableSetOf<Dialog>()
+  private var trashDropTargetMode: TrashDropTargetMode = TrashDropTargetMode.ICON_RESET
+
+  private enum class TrashDropTargetMode {
+    ICON_RESET,
+    WIDGET_REMOVE,
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     setTheme(R.style.AppTheme)
@@ -76,10 +99,13 @@ class MainActivity : Activity() {
 
     settings = AppSettings(this)
     gestureStore = GestureStore(this)
+    widgetStore = WidgetStore(this)
+    widgetHost = AppWidgetHost(this, WIDGET_HOST_ID)
     installedApps = InstalledApps(this)
     launchUsageStore = LaunchUsageStore(this)
     launchCounts = launchUsageStore.getLaunchCounts()
     savedGestures = gestureStore.loadGestures().toMutableList()
+    widgetPlacements = widgetStore.loadPlacements().associateBy { it.appWidgetId }.toMutableMap()
     seedDefaultGesturesIfNeeded()
 
     setContentView(buildRootView())
@@ -101,9 +127,68 @@ class MainActivity : Activity() {
     super.onPause()
   }
 
+  @Deprecated("Deprecated in Java")
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+
+    when (requestCode) {
+      REQUEST_PICK_WIDGET -> {
+        if (resultCode == RESULT_OK) {
+          val appWidgetId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+          pendingWidgetAllocationId = null
+          if (appWidgetId > 0) {
+            continueWidgetBinding(appWidgetId)
+          } else {
+            showFeedback("Widget selection failed")
+          }
+        } else {
+          releaseWidgetIdFromIntent(data)
+          pendingWidgetAllocationId?.let { releaseWidgetId(it) }
+          pendingWidgetAllocationId = null
+        }
+      }
+
+      REQUEST_BIND_WIDGET -> {
+        val appWidgetId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
+          ?.takeIf { it > 0 }
+          ?: pendingWidgetAllocationId
+          ?: -1
+        pendingWidgetAllocationId = null
+        if (resultCode == RESULT_OK && appWidgetId > 0) {
+          continueWidgetBinding(appWidgetId)
+        } else if (appWidgetId > 0) {
+          releaseWidgetId(appWidgetId)
+        }
+      }
+
+      REQUEST_CREATE_WIDGET -> {
+        val appWidgetId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+        if (resultCode == RESULT_OK && appWidgetId > 0) {
+          addWidgetPlacement(appWidgetId, configured = true)
+        } else {
+          releaseWidgetIdFromIntent(data)
+        }
+      }
+    }
+  }
+
+  override fun onStart() {
+    super.onStart()
+    widgetHost.startListening()
+    restoreWidgets()
+  }
+
+  override fun onStop() {
+    widgetHost.stopListening()
+    super.onStop()
+  }
+
   override fun onDestroy() {
     mainHandler.removeCallbacksAndMessages(null)
     appRefreshExecutor.shutdownNow()
+    if (::widgetLayerView.isInitialized) {
+      widgetLayerView.clearWidgets()
+    }
     super.onDestroy()
   }
 
@@ -120,13 +205,21 @@ class MainActivity : Activity() {
       trailEffect = settings.trailEffect
       iconScale = settings.homeIconScale
       onGestureComplete = ::handleGestureComplete
-      onLongPressOpenManagement = ::showManagementDialog
       onIconTapped = ::handleLauncherIconTapped
-      onCanvasSizeChanged = { updateLauncherIcons() }
+      onCanvasSizeChanged = {
+        settledHomeIconAnchors = emptyMap()
+        updateLauncherIcons()
+      }
       onIconScaleChanged = { scale -> settings.homeIconScale = scale }
       onIconPositionChanging = ::handleHomeIconPositionChanging
       onIconPositionCommitted = ::handleHomeIconPositionCommitted
-      onEditModeChanged = { editing -> showFeedback(if (editing) "Edit mode" else "Edit mode off") }
+      onIconDragStateChanged = { dragging -> setTrashDropTargetVisible(dragging, TrashDropTargetMode.ICON_RESET) }
+      onEditModeChanged = { editing ->
+        widgetLayerView.editMode = editing
+        if (::bottomSettingsBar.isInitialized) {
+          bottomSettingsBar.visibility = if (editing) View.VISIBLE else View.GONE
+        }
+      }
       onLauncherIconLayoutSettled = { mainHandler.post { handleHomeIconLayoutSettled() } }
       onGestureGhostChanged = ::handleGestureGhostChanged
       layoutParams = FrameLayout.LayoutParams(
@@ -136,7 +229,550 @@ class MainActivity : Activity() {
     }
 
     root.addView(canvasView)
+    widgetLayerView = WidgetLayerView(this).apply {
+      layoutParams = FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT,
+      )
+      editMode = canvasView.editMode
+      onLongPressEditMode = ::enterEditMode
+      onWidgetDragStateChanged = { dragging -> setTrashDropTargetVisible(dragging, TrashDropTargetMode.WIDGET_REMOVE) }
+      onWidgetPlacementChanging = { placement ->
+        widgetPlacements[placement.appWidgetId] = placement
+        updateTrashDropTargetHighlight(isTrashDropTargetHit(placement))
+        updateLauncherIcons()
+      }
+      onWidgetPlacementCommitted = { placement ->
+        if (isTrashDropTargetHit(placement)) {
+          setTrashDropTargetVisible(false)
+          removeWidget(placement.appWidgetId)
+        } else {
+          widgetPlacements[placement.appWidgetId] = placement
+          persistWidgetPlacements()
+          updateLauncherIcons()
+        }
+      }
+    }
+    root.addView(widgetLayerView)
+    bottomSettingsBar = buildBottomSettingsBar()
+    root.addView(bottomSettingsBar)
+    trashDropTargetView = buildTrashDropTarget()
+    root.addView(trashDropTargetView)
     return root
+  }
+
+  private fun enterEditMode() {
+    canvasView.editMode = true
+  }
+
+  private fun buildBottomSettingsBar(): View {
+    val bar = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER
+      setPadding(dp(8), dp(6), dp(8), dp(6))
+      background = GradientDrawable().apply {
+        setColor(Color.argb(190, 18, 18, 18))
+        cornerRadius = dp(8).toFloat()
+        setStroke(1, Color.argb(70, 255, 255, 255))
+      }
+      elevation = dp(8).toFloat()
+      visibility = if (canvasView.editMode) View.VISIBLE else View.GONE
+    }
+
+    bar.addView(bottomSettingsButton("Settings", ::showManagementDialog), bottomSettingsButtonParams())
+    bar.addView(bottomSettingsButton("Gestures", ::showGestureLibraryDialog), bottomSettingsButtonParams())
+    bar.addView(bottomSettingsButton("Add Widget", ::launchWidgetPicker), bottomSettingsButtonParams())
+
+    return bar.apply {
+      layoutParams = FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT,
+        Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+      ).apply {
+        leftMargin = dp(12)
+        rightMargin = dp(12)
+        bottomMargin = dp(12)
+      }
+    }
+  }
+
+  private fun bottomSettingsButton(text: String, onClick: () -> Unit): Button {
+    return Button(this).apply {
+      this.text = text
+      textSize = 13f
+      minHeight = dp(44)
+      minimumHeight = dp(44)
+      setPadding(dp(6), 0, dp(6), 0)
+      setOnClickListener { onClick() }
+    }
+  }
+
+  private fun bottomSettingsButtonParams(): LinearLayout.LayoutParams {
+    return LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+      leftMargin = dp(4)
+      rightMargin = dp(4)
+    }
+  }
+
+  private fun buildTrashDropTarget(): TextView {
+    return TextView(this).apply {
+      text = trashDropTargetText()
+      gravity = Gravity.CENTER
+      setTextColor(Color.WHITE)
+      textSize = 13f
+      typeface = Typeface.DEFAULT_BOLD
+      setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_delete_24, 0, 0)
+      compoundDrawablePadding = dp(4)
+      setPadding(dp(12), dp(8), dp(12), dp(8))
+      background = trashDropTargetBackground(highlighted = false)
+      alpha = 0.95f
+      visibility = View.INVISIBLE
+      elevation = dp(12).toFloat()
+      layoutParams = FrameLayout.LayoutParams(dp(144), dp(76), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+        bottomMargin = dp(88)
+      }
+    }
+  }
+
+  private fun setTrashDropTargetVisible(visible: Boolean) {
+    setTrashDropTargetVisible(visible, trashDropTargetMode)
+  }
+
+  private fun setTrashDropTargetVisible(visible: Boolean, mode: TrashDropTargetMode) {
+    trashDropTargetMode = mode
+    if (!::trashDropTargetView.isInitialized) return
+    trashDropTargetView.text = trashDropTargetText()
+    trashDropTargetView.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+    if (!visible) updateTrashDropTargetHighlight(false)
+  }
+
+  private fun trashDropTargetText(): String {
+    return when (trashDropTargetMode) {
+      TrashDropTargetMode.ICON_RESET -> "Reset count\nDrop here"
+      TrashDropTargetMode.WIDGET_REMOVE -> "Remove widget\nDrop here"
+    }
+  }
+
+  private fun updateTrashDropTargetHighlight(highlighted: Boolean) {
+    if (!::trashDropTargetView.isInitialized || trashDropTargetView.visibility != View.VISIBLE) return
+    trashDropTargetView.background = trashDropTargetBackground(highlighted)
+    trashDropTargetView.alpha = if (highlighted) 1.0f else 0.95f
+  }
+
+  private fun trashDropTargetBackground(highlighted: Boolean): GradientDrawable {
+    return GradientDrawable().apply {
+      setColor(if (highlighted) Color.rgb(186, 26, 26) else Color.argb(220, 42, 42, 42))
+      cornerRadius = dp(8).toFloat()
+      setStroke(dp(if (highlighted) 2 else 1), Color.argb(if (highlighted) 240 else 120, 255, 255, 255))
+    }
+  }
+
+  private fun isTrashDropTargetHit(x: Float, y: Float): Boolean {
+    if (!::trashDropTargetView.isInitialized || trashDropTargetView.visibility != View.VISIBLE) return false
+    if (trashDropTargetView.width <= 0 || trashDropTargetView.height <= 0) return false
+    return x >= trashDropTargetView.left &&
+      x <= trashDropTargetView.right &&
+      y >= trashDropTargetView.top &&
+      y <= trashDropTargetView.bottom
+  }
+
+  private fun isTrashDropTargetHit(placement: WidgetPlacement): Boolean {
+    if (!::trashDropTargetView.isInitialized || trashDropTargetView.visibility != View.VISIBLE) return false
+    if (trashDropTargetView.width <= 0 || trashDropTargetView.height <= 0) return false
+    val widgetLeft = placement.x.toFloat()
+    val widgetTop = placement.y.toFloat()
+    val widgetRight = widgetLeft + placement.width
+    val widgetBottom = widgetTop + placement.height
+    return widgetRight >= trashDropTargetView.left &&
+      widgetLeft <= trashDropTargetView.right &&
+      widgetBottom >= trashDropTargetView.top &&
+      widgetTop <= trashDropTargetView.bottom
+  }
+
+  private fun restoreWidgets() {
+    if (!::widgetLayerView.isInitialized) return
+
+    val manager = AppWidgetManager.getInstance(this)
+    val invalidWidgetIds = mutableListOf<Int>()
+    widgetLayerView.clearWidgets()
+
+    widgetPlacements.values.forEach { placement ->
+      val providerInfo = manager.getAppWidgetInfo(placement.appWidgetId)
+      if (providerInfo == null) {
+        invalidWidgetIds += placement.appWidgetId
+        return@forEach
+      }
+
+      val resolvedPlacement = resolveWidgetPlacementSize(
+        placement,
+        minWidthDp = providerInfo.minWidth,
+        minHeightDp = providerInfo.minHeight,
+      )
+      if (resolvedPlacement != placement) {
+        widgetPlacements[resolvedPlacement.appWidgetId] = resolvedPlacement
+      }
+
+      val hostView = widgetHost.createView(this, placement.appWidgetId, providerInfo)
+      widgetLayerView.addWidgetView(hostView, resolvedPlacement)
+    }
+
+    if (invalidWidgetIds.isNotEmpty()) {
+      invalidWidgetIds.forEach { widgetPlacements.remove(it) }
+      persistWidgetPlacements()
+    }
+
+    widgetLayerView.updateLayout(widgetPlacements.values.toList())
+  }
+
+  private fun resolveWidgetPlacementSize(
+    placement: WidgetPlacement,
+    minWidthDp: Int,
+    minHeightDp: Int,
+  ): WidgetPlacement {
+    val minWidth = dp(minWidthDp.coerceAtLeast(48))
+    val minHeight = dp(minHeightDp.coerceAtLeast(48))
+    val width = placement.width.takeIf { it > 0 } ?: minWidth
+    val height = placement.height.takeIf { it > 0 } ?: minHeight
+
+    if (
+      width == placement.width &&
+      height == placement.height &&
+      minWidth == placement.minWidth &&
+      minHeight == placement.minHeight
+    ) {
+      return placement
+    }
+
+    return placement.copy(
+      width = width,
+      height = height,
+      minWidth = minWidth,
+      minHeight = minHeight,
+      lastUpdated = System.currentTimeMillis(),
+    )
+  }
+
+  private fun persistWidgetPlacements() {
+    widgetStore.savePlacements(widgetPlacements.values.sortedBy { it.appWidgetId })
+  }
+
+  private fun launchWidgetPicker() {
+    showWidgetPickerDialog()
+  }
+
+  private fun showWidgetPickerDialog() {
+    val providers = loadWidgetProviders()
+    if (providers.isEmpty()) {
+      return
+    }
+
+    val dialog = fullScreenDialog()
+    val root = screenDialogRoot("Add Widget")
+    val list = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(0, dp(4), 0, dp(12))
+    }
+
+    providers
+      .groupBy { widgetProviderAppLabel(it) }
+      .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+      .forEach { (appLabel, appProviders) ->
+        list.addView(widgetAppHeader(appLabel, appProviders.size))
+        appProviders.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { widgetProviderLabel(it) })
+          .forEach { provider ->
+            list.addView(widgetProviderRow(provider, dialog))
+            list.addView(settingDivider())
+          }
+      }
+
+    val scroll = ScrollView(this).apply { addView(list) }
+    root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    trackDialog(dialog)
+    dialog.show()
+    expandDialog(dialog)
+  }
+
+  private fun loadWidgetProviders(): List<AppWidgetProviderInfo> {
+    val manager = AppWidgetManager.getInstance(this)
+    return runCatching { manager.installedProviders.orEmpty() }
+      .getOrDefault(emptyList())
+      .filter { it.provider != null }
+  }
+
+  private fun selectWidgetProvider(providerInfo: AppWidgetProviderInfo, ownerDialog: Dialog) {
+    val appWidgetId = widgetHost.allocateAppWidgetId()
+    pendingWidgetAllocationId = appWidgetId
+    ownerDialog.dismiss()
+
+    val manager = AppWidgetManager.getInstance(this)
+    val bound = runCatching {
+      manager.bindAppWidgetIdIfAllowed(
+        appWidgetId,
+        providerInfo.profile,
+        providerInfo.provider,
+        null,
+      )
+    }.getOrDefault(false)
+
+    if (bound) {
+      pendingWidgetAllocationId = null
+      continueWidgetBinding(appWidgetId)
+      return
+    }
+
+    val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
+      putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+      putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerInfo.provider)
+      putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER_PROFILE, providerInfo.profile)
+    }
+    try {
+      startActivityForResult(intent, REQUEST_BIND_WIDGET)
+    } catch (_: Exception) {
+      pendingWidgetAllocationId = null
+      releaseWidgetId(appWidgetId)
+      showFeedback("Widget permission unavailable")
+    }
+  }
+
+  private fun widgetAppHeader(appLabel: String, count: Int): View {
+    return TextView(this).apply {
+      text = if (count == 1) appLabel else "$appLabel ($count)"
+      setTextColor(primaryTextColor())
+      textSize = 15f
+      typeface = Typeface.DEFAULT_BOLD
+      setPadding(0, dp(18), 0, dp(6))
+    }
+  }
+
+  private fun widgetProviderRow(providerInfo: AppWidgetProviderInfo, ownerDialog: Dialog): View {
+    val label = widgetProviderLabel(providerInfo)
+    val subtitle = listOf(
+      "${providerInfo.minWidth.coerceAtLeast(1)} x ${providerInfo.minHeight.coerceAtLeast(1)} dp",
+      providerInfo.provider.flattenToShortString(),
+    ).joinToString("  •  ")
+
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      minimumHeight = dp(104)
+      setPadding(0, dp(8), 0, dp(8))
+      applySelectableItemBackground()
+
+      addView(widgetPreviewImage(providerInfo), LinearLayout.LayoutParams(dp(96), dp(72)).apply {
+        rightMargin = dp(12)
+      })
+      addView(settingsTextColumn(label, subtitle), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+      addView(ImageView(this@MainActivity).apply {
+        setImageResource(R.drawable.ic_chevron_right_24)
+        setColorFilter(secondaryTextColor())
+        contentDescription = null
+      }, LinearLayout.LayoutParams(dp(32), dp(32)))
+
+      setOnClickListener { selectWidgetProvider(providerInfo, ownerDialog) }
+    }
+  }
+
+  private fun widgetPreviewImage(providerInfo: AppWidgetProviderInfo): View {
+    val preview = runCatching { providerInfo.loadPreviewImage(this, 0) }.getOrNull()
+      ?: runCatching { providerInfo.loadIcon(this, 0) }.getOrNull()
+
+    return FrameLayout(this).apply {
+      background = GradientDrawable().apply {
+        setColor(Color.argb(26, 127, 127, 127))
+        cornerRadius = dp(8).toFloat()
+        setStroke(1, Color.argb(45, 127, 127, 127))
+      }
+      addView(ImageView(this@MainActivity).apply {
+        setImageDrawable(preview)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        adjustViewBounds = true
+        contentDescription = null
+        setPadding(dp(6), dp(6), dp(6), dp(6))
+      }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
+    }
+  }
+
+  private fun widgetProviderLabel(providerInfo: AppWidgetProviderInfo): String {
+    return providerInfo.loadLabel(packageManager)?.toString().orEmpty().ifBlank {
+      providerInfo.provider.className.substringAfterLast('.')
+    }
+  }
+
+  private fun widgetProviderAppLabel(providerInfo: AppWidgetProviderInfo): String {
+    val packageName = providerInfo.provider.packageName
+    return runCatching {
+      val applicationInfo = packageManager.getApplicationInfo(packageName, 0)
+      packageManager.getApplicationLabel(applicationInfo).toString()
+    }.getOrDefault(packageName)
+  }
+
+  private fun continueWidgetBinding(appWidgetId: Int) {
+    val manager = AppWidgetManager.getInstance(this)
+    val providerInfo = manager.getAppWidgetInfo(appWidgetId)
+    if (providerInfo == null) {
+      releaseWidgetId(appWidgetId)
+      showFeedback("Widget unavailable")
+      return
+    }
+
+    val configComponent = providerInfo.configure
+    if (configComponent == null) {
+      addWidgetPlacement(appWidgetId, configured = true)
+      return
+    }
+
+    val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
+      component = configComponent
+      putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+    }
+    startActivityForResult(intent, REQUEST_CREATE_WIDGET)
+  }
+
+  private fun addWidgetPlacement(appWidgetId: Int, configured: Boolean) {
+    val manager = AppWidgetManager.getInstance(this)
+    val providerInfo = manager.getAppWidgetInfo(appWidgetId)
+    if (providerInfo == null) {
+      releaseWidgetId(appWidgetId)
+      showFeedback("Widget unavailable")
+      return
+    }
+
+    val minWidthPx = dp(providerInfo.minWidth.coerceAtLeast(120))
+    val minHeightPx = dp(providerInfo.minHeight.coerceAtLeast(80))
+    val width = minWidthPx
+    val height = minHeightPx
+    val canvasWidth = if (::canvasView.isInitialized && canvasView.width > 0) {
+      canvasView.width
+    } else {
+      resources.displayMetrics.widthPixels
+    }
+    val canvasHeight = if (::canvasView.isInitialized && canvasView.height > 0) {
+      canvasView.height
+    } else {
+      resources.displayMetrics.heightPixels
+    }
+
+    val placement = WidgetPlacement(
+      appWidgetId = appWidgetId,
+      provider = providerInfo.provider.flattenToString(),
+      x = ((canvasWidth - width) / 2).coerceAtLeast(0),
+      y = ((canvasHeight - height) / 2).coerceAtLeast(0),
+      width = width,
+      height = height,
+      minWidth = minWidthPx,
+      minHeight = minHeightPx,
+      configured = configured,
+    )
+    widgetPlacements[appWidgetId] = placement
+    persistWidgetPlacements()
+
+    val hostView = widgetHost.createView(this, appWidgetId, providerInfo)
+    widgetLayerView.addWidgetView(hostView, placement)
+    widgetLayerView.updateLayout(widgetPlacements.values.toList())
+  }
+
+  private fun showRemoveWidgetDialog() {
+    if (widgetPlacements.isEmpty()) {
+      return
+    }
+
+    val manager = AppWidgetManager.getInstance(this)
+    val dialog = fullScreenDialog()
+    val root = screenDialogRoot("Remove Widget")
+    val list = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(0, dp(4), 0, dp(12))
+    }
+
+    widgetPlacements.values.sortedBy { it.appWidgetId }.forEach { placement ->
+      val providerInfo = manager.getAppWidgetInfo(placement.appWidgetId)
+      val label = providerInfo?.loadLabel(packageManager)?.toString().orEmpty().ifBlank {
+        "Widget #${placement.appWidgetId}"
+      }
+      val subtitle = providerInfo?.provider?.flattenToShortString() ?: placement.provider
+      list.addView(widgetRemovalRow(label, subtitle, placement, providerInfo, dialog))
+      list.addView(settingDivider())
+    }
+
+    val scroll = ScrollView(this).apply { addView(list) }
+    root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setContentView(root)
+    trackDialog(dialog)
+    dialog.show()
+    expandDialog(dialog)
+  }
+
+  private fun removeWidget(appWidgetId: Int) {
+    widgetLayerView.removeWidgetView(appWidgetId)
+    widgetPlacements.remove(appWidgetId)
+    releaseWidgetId(appWidgetId)
+    persistWidgetPlacements()
+  }
+
+  private fun releaseWidgetIdFromIntent(data: Intent?) {
+    val appWidgetId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+    if (appWidgetId > 0) {
+      releaseWidgetId(appWidgetId)
+    }
+  }
+
+  private fun releaseWidgetId(appWidgetId: Int) {
+    runCatching { widgetHost.deleteAppWidgetId(appWidgetId) }
+  }
+
+  private fun widgetRemovalRow(
+    label: String,
+    subtitle: String,
+    placement: WidgetPlacement,
+    providerInfo: android.appwidget.AppWidgetProviderInfo?,
+    ownerDialog: Dialog,
+  ): View {
+    val row = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(0, dp(10), 0, dp(10))
+    }
+
+    val header = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+    }
+    header.addView(settingsTextColumn(label, subtitle, destructive = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+    header.addView(secondaryButton("Remove") {
+      showConfirmDialog(
+        title = "Remove Widget",
+        message = "Remove $label from your home surface?",
+        confirmText = "Remove",
+      ) {
+        removeWidget(placement.appWidgetId)
+        ownerDialog.dismiss()
+      }
+    })
+    row.addView(header)
+
+    if (providerInfo != null) {
+      val preview = runCatching {
+        widgetHost.createView(this, placement.appWidgetId, providerInfo)
+      }.getOrNull()
+      if (preview != null) {
+        preview.isEnabled = false
+        preview.isClickable = false
+        val maxPreviewWidth = resources.displayMetrics.widthPixels - dp(64)
+        val scaledWidth = placement.width.coerceAtMost(maxPreviewWidth).coerceAtLeast(dp(120))
+        val scaledHeight = ((scaledWidth.toFloat() / placement.width.coerceAtLeast(1)) * placement.height)
+          .roundToInt()
+          .coerceIn(dp(64), dp(220))
+        row.addView(preview, LinearLayout.LayoutParams(scaledWidth, scaledHeight).apply {
+          topMargin = dp(8)
+        })
+      }
+    }
+
+    return row
   }
 
   private fun handleGestureComplete(normalizedPoints: List<Point>) {
@@ -155,7 +791,6 @@ class MainActivity : Activity() {
     }
 
     requestAssignApp("gesture_${System.currentTimeMillis()}", normalizedPoints)
-    showFeedback("New gesture! Assign an app.")
   }
 
   private fun requestAssignApp(label: String, normalizedPath: List<Point>) {
@@ -218,7 +853,6 @@ class MainActivity : Activity() {
       normalizedPath = gesture.normalizedPath,
     )
     persistGestures()
-    showFeedback("App assigned!")
     maybeLaunchAfterAssign(target)
     pendingGesture = null
   }
@@ -243,7 +877,6 @@ class MainActivity : Activity() {
       }
       else -> {
         requestAssignApp(gesture.label, gesture.normalizedPath)
-        showFeedback("Assign an app to this gesture")
         false
       }
     }
@@ -269,7 +902,6 @@ class MainActivity : Activity() {
         true
       }
       else -> {
-        showFeedback("Special function unavailable")
         false
       }
     }
@@ -281,7 +913,7 @@ class MainActivity : Activity() {
       includeSpecialFunctions = false,
     ) { app ->
       val launched = launchAppPackage(app.packageName)
-      showFeedback(if (launched) "Launching ${app.label}" else "Launch failed")
+      if (!launched) showFeedback("Launch failed")
     }
   }
 
@@ -370,7 +1002,6 @@ class MainActivity : Activity() {
             if (gesture.label == mergeTarget.label) gesture.copy(normalizedPath = blendedPath) else gesture
           }.toMutableList()
           persistGestures()
-          showFeedback("Gestures merged!")
           maybeLaunchAfterAssign(target)
           pendingGesture = null
         }
@@ -553,6 +1184,16 @@ class MainActivity : Activity() {
       showGestureLibraryDialog()
     })
     list.addView(settingDivider())
+    list.addView(settingsActionRow("Add widget", "Place an Android widget on your home surface") {
+      dialog.dismiss()
+      launchWidgetPicker()
+    })
+    list.addView(settingDivider())
+    list.addView(settingsActionRow("Remove widget", "Delete a widget from your home surface") {
+      dialog.dismiss()
+      showRemoveWidgetDialog()
+    })
+    list.addView(settingDivider())
     list.addView(settingsActionRow("Wallpaper", "Open Android wallpaper and style", onClick = ::openWallpaperChooser))
     list.addView(settingDivider())
     list.addView(settingsActionRow("Home app", "Choose the default launcher", onClick = ::openHomeAppSettings))
@@ -603,7 +1244,6 @@ class MainActivity : Activity() {
         gestureStore.clearGestures()
         dialog.dismiss()
         showGestureLibraryDialog()
-        showFeedback("Gestures cleared")
       }
     })
     scroll.addView(list)
@@ -661,7 +1301,6 @@ class MainActivity : Activity() {
         persistGestures()
         ownerDialog.dismiss()
         showGestureLibraryDialog()
-        showFeedback("Gesture reassigned")
       }
     })
     row.addView(secondaryButton("Delete") {
@@ -674,7 +1313,6 @@ class MainActivity : Activity() {
         persistGestures()
         ownerDialog.dismiss()
         showGestureLibraryDialog()
-        showFeedback("Gesture deleted")
       }
     })
     return row
@@ -683,7 +1321,7 @@ class MainActivity : Activity() {
   private fun showOnboardingDialog() {
     val dialog = Dialog(this)
     val root = compactDialogRoot("GlyphOS")
-    root.addView(bodyText("Swipe up to open the app list. Draw a sideways line to open Google. Draw any other gesture to assign or launch an app. Long press the screen to manage gestures."))
+    root.addView(bodyText("Swipe up to open the app list. Draw a sideways line to open Google. Draw any other gesture to assign or launch an app. Long press to edit the home screen; the settings buttons appear in edit mode."))
     root.addView(primaryButton("Start") {
       settings.onboardingDone = true
       dialog.dismiss()
@@ -820,7 +1458,7 @@ class MainActivity : Activity() {
       minSizePx = minIconSize,
       maxSizePx = maxIconSize,
       previousNodes = previousIcons,
-      anchorPositions = homeIconAnchors,
+      anchorPositions = settledHomeIconAnchors + homeIconAnchors,
       fixedPositions = fixedHomeIconPositions(),
       ghostNodes = gestureGhostNodes(),
     )
@@ -868,7 +1506,9 @@ class MainActivity : Activity() {
     height: Int,
   ) {
     homeIconResetState = null
+    updateTrashDropTargetHighlight(isTrashDropTargetHit(x, y))
     val anchor = Point(x.toDouble(), y.toDouble())
+    settledHomeIconAnchors = settledHomeIconAnchors - app.packageName
     homeIconAnchors = homeIconAnchors + (app.packageName to anchor)
     draggingHomeIconPositions = mapOf(app.packageName to anchor)
     updateLauncherIcons()
@@ -882,7 +1522,22 @@ class MainActivity : Activity() {
     height: Int,
   ) {
     homeIconResetState = null
+    if (isTrashDropTargetHit(x, y)) {
+      resetAppLaunchCount(app)
+      setTrashDropTargetVisible(false)
+      return
+    }
+    settledHomeIconAnchors = settledHomeIconAnchors - app.packageName
     homeIconAnchors = homeIconAnchors + (app.packageName to Point(x.toDouble(), y.toDouble()))
+    draggingHomeIconPositions = emptyMap()
+    updateLauncherIcons()
+  }
+
+  private fun resetAppLaunchCount(app: AppDetail) {
+    launchUsageStore.reset(app.packageName)
+    launchCounts = launchCounts - app.packageName
+    settledHomeIconAnchors = settledHomeIconAnchors - app.packageName
+    homeIconAnchors = homeIconAnchors - app.packageName
     draggingHomeIconPositions = emptyMap()
     updateLauncherIcons()
   }
@@ -893,14 +1548,40 @@ class MainActivity : Activity() {
   }
 
   private fun gestureGhostNodes(): List<LauncherIconGhostNode> {
-    val position = gestureGhostPosition ?: return emptyList()
-    return listOf(
+    val gestureGhosts = gestureGhostPosition?.let { position ->
+      listOf(
+        LauncherIconGhostNode(
+          x = position.x,
+          y = position.y,
+          radiusPx = dp(HOME_ICON_GHOST_RADIUS_DP).toDouble(),
+        ),
+      )
+    }.orEmpty()
+
+    val maxGhostRadius = if (::canvasView.isInitialized && canvasView.width > 0 && canvasView.height > 0) {
+      minOf(canvasView.width, canvasView.height) * 0.45
+    } else {
+      Double.MAX_VALUE
+    }
+
+    val widgetGhosts = widgetPlacements.values.map { placement ->
+      val longestSide = maxOf(placement.width, placement.height).toDouble()
+      val shortestSide = minOf(placement.width, placement.height).toDouble()
+      val radius = (
+        longestSide * 0.28 +
+          shortestSide * 0.08 +
+          dp(6)
+        )
+        .coerceAtLeast(dp(20).toDouble())
+        .coerceAtMost(maxGhostRadius)
       LauncherIconGhostNode(
-        x = position.x,
-        y = position.y,
-        radiusPx = dp(HOME_ICON_GHOST_RADIUS_DP).toDouble(),
-      ),
-    )
+        x = placement.x + placement.width / 2.0,
+        y = placement.y + placement.height / 2.0,
+        radiusPx = radius,
+      )
+    }
+
+    return gestureGhosts + widgetGhosts
   }
 
   private fun handleGestureGhostChanged(position: Point?) {
@@ -924,15 +1605,14 @@ class MainActivity : Activity() {
     val selectedApps = selectHomeApps(apps, minIconSize, maxIconSize)
     val steps = buildHomeIconResetSteps(selectedApps, minIconSize, maxIconSize)
     if (steps.isEmpty()) {
-      showFeedback("No home icons to reset")
       return
     }
 
+    settledHomeIconAnchors = emptyMap()
     homeIconAnchors = emptyMap()
     draggingHomeIconPositions = emptyMap()
     canvasView.editMode = false
     homeIconResetState = HomeIconResetState(steps = steps)
-    showFeedback("Resetting layout")
     advanceHomeIconResetStep()
   }
 
@@ -1021,7 +1701,11 @@ class MainActivity : Activity() {
   }
 
   private fun handleHomeIconLayoutSettled() {
-    val state = homeIconResetState ?: return
+    val state = homeIconResetState
+    if (state == null) {
+      rememberSettledHomeIconAnchors()
+      return
+    }
     val activeStep = state.activeStep ?: return
     val activeIcon = canvasView.launcherIcons.firstOrNull { icon -> icon.app.packageName == activeStep.packageName } ?: return
     val settleDistanceSquared = HOME_ICON_RESET_SETTLE_PX * HOME_ICON_RESET_SETTLE_PX
@@ -1041,6 +1725,18 @@ class MainActivity : Activity() {
     }
   }
 
+  private fun rememberSettledHomeIconAnchors() {
+    if (!::canvasView.isInitialized) return
+    if (gestureGhostPosition != null || draggingHomeIconPositions.isNotEmpty()) return
+
+    val settledAnchors = canvasView.launcherIcons.associate { icon ->
+      icon.app.packageName to Point(icon.x, icon.y)
+    }
+    if (settledAnchors.isEmpty()) return
+
+    settledHomeIconAnchors = settledHomeIconAnchors + settledAnchors
+  }
+
   private fun finishHomeIconLayoutReset() {
     val finalPositions = homeIconResetState?.fixedPositions.orEmpty()
     if (finalPositions.isNotEmpty()) {
@@ -1048,7 +1744,6 @@ class MainActivity : Activity() {
     }
     homeIconResetState = null
     updateLauncherIcons()
-    showFeedback("Layout reset")
   }
 
   private fun distanceSquared(leftX: Double, leftY: Double, rightX: Double, rightY: Double): Double {

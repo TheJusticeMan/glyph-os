@@ -32,12 +32,12 @@ private const val EDIT_HALO_ALPHA = 55
 
 class GestureCanvasView(context: Context) : View(context) {
   var onGestureComplete: ((List<Point>) -> Unit)? = null
-  var onLongPressOpenManagement: (() -> Unit)? = null
   var onIconTapped: ((AppDetail) -> Unit)? = null
   var onCanvasSizeChanged: (() -> Unit)? = null
   var onIconScaleChanged: ((Float) -> Unit)? = null
   var onIconPositionChanging: ((AppDetail, Float, Float, Int, Int) -> Unit)? = null
   var onIconPositionCommitted: ((AppDetail, Float, Float, Int, Int) -> Unit)? = null
+  var onIconDragStateChanged: ((Boolean) -> Unit)? = null
   var onEditModeChanged: ((Boolean) -> Unit)? = null
   var onLauncherIconLayoutSettled: (() -> Unit)? = null
   var onGestureGhostChanged: ((Point?) -> Unit)? = null
@@ -131,10 +131,8 @@ class GestureCanvasView(context: Context) : View(context) {
     longPressTriggered = true
     clearNow()
     val icon = pressedIcon
-    if (icon == null || iconScale <= 0f) {
-      onLongPressOpenManagement?.invoke()
-    } else {
-      editMode = true
+    editMode = true
+    if (icon != null && iconScale > 0f) {
       beginIconDrag(icon, downX, downY)
     }
   }
@@ -419,6 +417,7 @@ class GestureCanvasView(context: Context) : View(context) {
     dragOffsetX = icon.x - touchX
     dragOffsetY = icon.y - touchY
     draggedDuringEdit = false
+    onIconDragStateChanged?.invoke(true)
     rawPoints.clear()
     path.reset()
     invalidate()
@@ -442,6 +441,7 @@ class GestureCanvasView(context: Context) : View(context) {
     if (commit && current != null && draggedDuringEdit) {
       onIconPositionCommitted?.invoke(current.app, current.x.toFloat(), current.y.toFloat(), width, height)
     }
+    onIconDragStateChanged?.invoke(false)
     draggedDuringEdit = false
     clearNow()
   }

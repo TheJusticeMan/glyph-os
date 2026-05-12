@@ -209,8 +209,21 @@ object LauncherIconLayout {
 
   private fun clamp(nodes: List<MutableNode>, width: Double, height: Double) {
     for (node in nodes) {
-      node.x = node.x.coerceIn(node.radiusPx, width - node.radiusPx)
-      node.y = node.y.coerceIn(node.radiusPx, height - node.radiusPx)
+      val minX = node.radiusPx
+      val maxX = width - node.radiusPx
+      node.x = if (maxX >= minX) {
+        node.x.coerceIn(minX, maxX)
+      } else {
+        width / 2.0
+      }
+
+      val minY = node.radiusPx
+      val maxY = height - node.radiusPx
+      node.y = if (maxY >= minY) {
+        node.y.coerceIn(minY, maxY)
+      } else {
+        height / 2.0
+      }
     }
   }
 
