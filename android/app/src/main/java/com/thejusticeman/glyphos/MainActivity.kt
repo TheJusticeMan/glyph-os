@@ -62,6 +62,7 @@ class MainActivity : Activity() {
   private lateinit var gestureStore: GestureStore
   private lateinit var installedApps: InstalledApps
   private lateinit var launchUsageStore: LaunchUsageStore
+  private lateinit var homeIconAnchorStore: HomeIconAnchorStore
   private lateinit var canvasView: GestureCanvasView
   private lateinit var widgetStore: WidgetStore
   private lateinit var widgetHost: AppWidgetHost
@@ -74,7 +75,6 @@ class MainActivity : Activity() {
   private var savedGestures: MutableList<SavedGesture> = mutableListOf()
   private var pendingGesture: PendingGesture? = null
   private var launchCounts: Map<String, Int> = emptyMap()
-  private var settledHomeIconAnchors: Map<String, Point> = emptyMap()
   private var homeIconAnchors: Map<String, Point> = emptyMap()
   private var draggingHomeIconPositions: Map<String, Point> = emptyMap()
   private var homeIconResetState: HomeIconResetState? = null
@@ -100,17 +100,23 @@ class MainActivity : Activity() {
     settings = AppSettings(this)
     gestureStore = GestureStore(this)
     widgetStore = WidgetStore(this)
+    homeIconAnchorStore = HomeIconAnchorStore(this)
     widgetHost = AppWidgetHost(this, WIDGET_HOST_ID)
     installedApps = InstalledApps(this)
     launchUsageStore = LaunchUsageStore(this)
     launchCounts = launchUsageStore.getLaunchCounts()
+    homeIconAnchors = homeIconAnchorStore.loadAnchors()
     savedGestures = gestureStore.loadGestures().toMutableList()
     widgetPlacements = widgetStore.loadPlacements().associateBy { it.appWidgetId }.toMutableMap()
     seedDefaultGesturesIfNeeded()
 
     setContentView(buildRootView())
     updateLauncherIcons()
-    refreshInstalledAppCache { updateLauncherIcons(it) }
+    if (homeIconAnchors.isEmpty()) {
+      refreshInstalledAppCache { updateLauncherIcons(it) }
+    } else {
+      refreshInstalledAppCache()
+    }
 
     if (!settings.onboardingDone) {
       showOnboardingDialog()
@@ -179,6 +185,9 @@ class MainActivity : Activity() {
   }
 
   override fun onStop() {
+    if (homeIconResetState == null) {
+      persistHomeIconAnchors()
+    }
     widgetHost.stopListening()
     super.onStop()
   }
@@ -207,7 +216,6 @@ class MainActivity : Activity() {
       onGestureComplete = ::handleGestureComplete
       onIconTapped = ::handleLauncherIconTapped
       onCanvasSizeChanged = {
-        settledHomeIconAnchors = emptyMap()
         updateLauncherIcons()
       }
       onIconScaleChanged = { scale -> settings.homeIconScale = scale }
@@ -1341,6 +1349,10 @@ class MainActivity : Activity() {
     gestureStore.saveGestures(savedGestures)
   }
 
+  private fun persistHomeIconAnchors() {
+    homeIconAnchorStore.saveAnchors(homeIconAnchors)
+  }
+
   private fun openWallpaperChooser() {
     try {
       startActivity(Intent("android.intent.action.SET_WALLPAPER"))
@@ -1458,7 +1470,7 @@ class MainActivity : Activity() {
       minSizePx = minIconSize,
       maxSizePx = maxIconSize,
       previousNodes = previousIcons,
-      anchorPositions = settledHomeIconAnchors + homeIconAnchors,
+      anchorPositions = homeIconAnchors,
       fixedPositions = fixedHomeIconPositions(),
       ghostNodes = gestureGhostNodes(),
     )
@@ -1508,7 +1520,6 @@ class MainActivity : Activity() {
     homeIconResetState = null
     updateTrashDropTargetHighlight(isTrashDropTargetHit(x, y))
     val anchor = Point(x.toDouble(), y.toDouble())
-    settledHomeIconAnchors = settledHomeIconAnchors - app.packageName
     homeIconAnchors = homeIconAnchors + (app.packageName to anchor)
     draggingHomeIconPositions = mapOf(app.packageName to anchor)
     updateLauncherIcons()
@@ -1527,18 +1538,18 @@ class MainActivity : Activity() {
       setTrashDropTargetVisible(false)
       return
     }
-    settledHomeIconAnchors = settledHomeIconAnchors - app.packageName
     homeIconAnchors = homeIconAnchors + (app.packageName to Point(x.toDouble(), y.toDouble()))
     draggingHomeIconPositions = emptyMap()
+    persistHomeIconAnchors()
     updateLauncherIcons()
   }
 
   private fun resetAppLaunchCount(app: AppDetail) {
     launchUsageStore.reset(app.packageName)
     launchCounts = launchCounts - app.packageName
-    settledHomeIconAnchors = settledHomeIconAnchors - app.packageName
     homeIconAnchors = homeIconAnchors - app.packageName
     draggingHomeIconPositions = emptyMap()
+    persistHomeIconAnchors()
     updateLauncherIcons()
   }
 
@@ -1608,7 +1619,6 @@ class MainActivity : Activity() {
       return
     }
 
-    settledHomeIconAnchors = emptyMap()
     homeIconAnchors = emptyMap()
     draggingHomeIconPositions = emptyMap()
     canvasView.editMode = false
@@ -1726,23 +1736,15 @@ class MainActivity : Activity() {
   }
 
   private fun rememberSettledHomeIconAnchors() {
-    if (!::canvasView.isInitialized) return
-    if (gestureGhostPosition != null || draggingHomeIconPositions.isNotEmpty()) return
-
-    val settledAnchors = canvasView.launcherIcons.associate { icon ->
-      icon.app.packageName to Point(icon.x, icon.y)
-    }
-    if (settledAnchors.isEmpty()) return
-
-    settledHomeIconAnchors = settledHomeIconAnchors + settledAnchors
   }
 
   private fun finishHomeIconLayoutReset() {
     val finalPositions = homeIconResetState?.fixedPositions.orEmpty()
+    homeIconResetState = null
     if (finalPositions.isNotEmpty()) {
       homeIconAnchors = finalPositions
+      persistHomeIconAnchors()
     }
-    homeIconResetState = null
     updateLauncherIcons()
   }
 

@@ -159,42 +159,7 @@ object LauncherIconLayout {
     for (leftIndex in nodes.indices) {
       val left = nodes[leftIndex]
       for (rightIndex in leftIndex + 1 until nodes.size) {
-        val right = nodes[rightIndex]
-        var dx = right.x - left.x
-        var dy = right.y - left.y
-        var distanceSquared = dx * dx + dy * dy
-
-        if (distanceSquared < 0.0001) {
-          val angle = ((leftIndex + 1) * 37 + (rightIndex + 1) * 17) * PI / 180.0
-          dx = cos(angle)
-          dy = sin(angle)
-          distanceSquared = 1.0
-        }
-
-        val distance = sqrt(distanceSquared)
-        val minimumDistance = left.radiusPx + right.radiusPx + max(left.radiusPx, right.radiusPx) * PADDING_FACTOR
-        if (distance >= minimumDistance) continue
-
-        val overlap = (minimumDistance - distance) * REPULSION_DAMPING
-        val pushX = dx / distance * overlap
-        val pushY = dy / distance * overlap
-        when {
-          left.fixed && right.fixed -> Unit
-          left.fixed -> {
-            right.x += pushX
-            right.y += pushY
-          }
-          right.fixed -> {
-            left.x -= pushX
-            left.y -= pushY
-          }
-          else -> {
-            left.x -= pushX / 2.0
-            left.y -= pushY / 2.0
-            right.x += pushX / 2.0
-            right.y += pushY / 2.0
-          }
-        }
+        resolvePair(left, nodes[rightIndex], leftIndex, rightIndex)
       }
     }
   }
@@ -209,21 +174,63 @@ object LauncherIconLayout {
 
   private fun clamp(nodes: List<MutableNode>, width: Double, height: Double) {
     for (node in nodes) {
-      val minX = node.radiusPx
-      val maxX = width - node.radiusPx
-      node.x = if (maxX >= minX) {
-        node.x.coerceIn(minX, maxX)
-      } else {
-        width / 2.0
-      }
+      clampNode(node, width, height)
+    }
+  }
 
-      val minY = node.radiusPx
-      val maxY = height - node.radiusPx
-      node.y = if (maxY >= minY) {
-        node.y.coerceIn(minY, maxY)
-      } else {
-        height / 2.0
+  private fun resolvePair(left: MutableNode, right: MutableNode, leftIndex: Int, rightIndex: Int) {
+    var dx = right.x - left.x
+    var dy = right.y - left.y
+    var distanceSquared = dx * dx + dy * dy
+
+    if (distanceSquared < 0.0001) {
+      val angle = ((leftIndex + 1) * 37 + (rightIndex + 1) * 17) * PI / 180.0
+      dx = cos(angle)
+      dy = sin(angle)
+      distanceSquared = 1.0
+    }
+
+    val distance = sqrt(distanceSquared)
+    val minimumDistance = left.radiusPx + right.radiusPx + max(left.radiusPx, right.radiusPx) * PADDING_FACTOR
+    if (distance >= minimumDistance) return
+
+    val overlap = (minimumDistance - distance) * REPULSION_DAMPING
+    val pushX = dx / distance * overlap
+    val pushY = dy / distance * overlap
+    when {
+      left.fixed && right.fixed -> Unit
+      left.fixed -> {
+        right.x += pushX
+        right.y += pushY
       }
+      right.fixed -> {
+        left.x -= pushX
+        left.y -= pushY
+      }
+      else -> {
+        left.x -= pushX / 2.0
+        left.y -= pushY / 2.0
+        right.x += pushX / 2.0
+        right.y += pushY / 2.0
+      }
+    }
+  }
+
+  private fun clampNode(node: MutableNode, width: Double, height: Double) {
+    val minX = node.radiusPx
+    val maxX = width - node.radiusPx
+    node.x = if (maxX >= minX) {
+      node.x.coerceIn(minX, maxX)
+    } else {
+      width / 2.0
+    }
+
+    val minY = node.radiusPx
+    val maxY = height - node.radiusPx
+    node.y = if (maxY >= minY) {
+      node.y.coerceIn(minY, maxY)
+    } else {
+      height / 2.0
     }
   }
 

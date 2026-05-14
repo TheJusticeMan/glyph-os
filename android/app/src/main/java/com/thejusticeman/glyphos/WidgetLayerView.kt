@@ -112,65 +112,33 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
     }
 
     if (!editMode) return super.onTouchEvent(event)
-    
+
     val targetWidgetId = activeTouchWidgetId ?: widgetIdAt(event)
     val placement = targetWidgetId?.let { placementsById[it] } ?: return super.onTouchEvent(event)
 
     return when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
-        val appWidgetId = targetWidgetId
-        activeTouchWidgetId = appWidgetId
-        focusWidget(appWidgetId)
-        activeResizeHandle = resizeHandleAt(event.x - placement.x, event.y - placement.y, placement)
-        activeMode = if (activeResizeHandle != ResizeHandle.NONE) TouchMode.RESIZE else TouchMode.DRAG
-        if (activeMode == TouchMode.DRAG) onWidgetDragStateChanged?.invoke(true)
-        touchStartRawX = event.rawX
-        touchStartRawY = event.rawY
-        touchStartX = placement.x
-        touchStartY = placement.y
-        touchStartWidth = placement.width
-        touchStartHeight = placement.height
-        requestDisallowInterceptTouchEvent(true)
+        startEditTouch(
+          appWidgetId = targetWidgetId,
+          placement = placement,
+          localX = event.x - placement.x,
+          localY = event.y - placement.y,
+          rawX = event.rawX,
+          rawY = event.rawY,
+        ) {
+          requestDisallowInterceptTouchEvent(true)
+        }
         true
       }
 
       MotionEvent.ACTION_MOVE -> {
-        val appWidgetId = activeTouchWidgetId ?: return true
-        val activePlacement = placementsById[appWidgetId] ?: return true
-        val deltaX = (event.rawX - touchStartRawX).toInt()
-        val deltaY = (event.rawY - touchStartRawY).toInt()
-        val nextPlacement = when (activeMode) {
-          TouchMode.DRAG -> {
-            var nextX = (touchStartX + deltaX).coerceIn(0, (width - activePlacement.width).coerceAtLeast(0))
-            var nextY = (touchStartY + deltaY).coerceIn(0, (height - activePlacement.height).coerceAtLeast(0))
-
-            val snappedX = snapCoordinate(nextX, activePlacement.width, true, appWidgetId)
-            val snappedY = snapCoordinate(nextY, activePlacement.height, false, appWidgetId)
-            nextX = snappedX ?: nextX
-            nextY = snappedY ?: nextY
-
-            activePlacement.copy(
-              x = nextX,
-              y = nextY,
-              lastUpdated = System.currentTimeMillis(),
-            )
-          }
-
-          TouchMode.RESIZE -> resizePlacement(activePlacement, deltaX, deltaY)
-          TouchMode.NONE -> activePlacement
-        }
-        updatePlacement(nextPlacement)
-        onWidgetPlacementChanging?.invoke(nextPlacement)
+        handleActiveEditTouchMove(event.rawX, event.rawY)
         true
       }
 
       MotionEvent.ACTION_UP,
       MotionEvent.ACTION_CANCEL -> {
-        val appWidgetId = activeTouchWidgetId
-        if (appWidgetId != null) {
-          placementsById[appWidgetId]?.let { onWidgetPlacementCommitted?.invoke(it) }
-        }
-        resetTouchState()
+        finishActiveEditTouch()
         true
       }
 
@@ -250,59 +218,28 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
 
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
-        activeTouchWidgetId = appWidgetId
-        focusWidget(appWidgetId)
-        activeResizeHandle = resizeHandleAt(event.x, event.y, placement)
-        activeMode = if (activeResizeHandle != ResizeHandle.NONE) TouchMode.RESIZE else TouchMode.DRAG
-        if (activeMode == TouchMode.DRAG) onWidgetDragStateChanged?.invoke(true)
-        touchStartRawX = event.rawX
-        touchStartRawY = event.rawY
-        touchStartX = placement.x
-        touchStartY = placement.y
-        touchStartWidth = placement.width
-        touchStartHeight = placement.height
-        view.parent?.requestDisallowInterceptTouchEvent(true)
+        startEditTouch(
+          appWidgetId = appWidgetId,
+          placement = placement,
+          localX = event.x,
+          localY = event.y,
+          rawX = event.rawX,
+          rawY = event.rawY,
+        ) {
+          view.parent?.requestDisallowInterceptTouchEvent(true)
+        }
         return true
       }
 
       MotionEvent.ACTION_MOVE -> {
         if (activeTouchWidgetId != appWidgetId) return true
-        val deltaX = (event.rawX - touchStartRawX).toInt()
-        val deltaY = (event.rawY - touchStartRawY).toInt()
-        val nextPlacement = when (activeMode) {
-          TouchMode.DRAG -> {
-            var nextX = (touchStartX + deltaX).coerceIn(0, (width - placement.width).coerceAtLeast(0))
-            var nextY = (touchStartY + deltaY).coerceIn(0, (height - placement.height).coerceAtLeast(0))
-            
-            // Apply snapping
-            val snappedX = snapCoordinate(nextX, placement.width, true, appWidgetId)
-            val snappedY = snapCoordinate(nextY, placement.height, false, appWidgetId)
-            nextX = snappedX ?: nextX
-            nextY = snappedY ?: nextY
-            
-            placement.copy(
-              x = nextX,
-              y = nextY,
-              lastUpdated = System.currentTimeMillis(),
-            )
-          }
-
-          TouchMode.RESIZE -> resizePlacement(placement, deltaX, deltaY)
-
-          TouchMode.NONE -> placement
-        }
-
-        updatePlacement(nextPlacement)
-        onWidgetPlacementChanging?.invoke(nextPlacement)
+        handleActiveEditTouchMove(event.rawX, event.rawY)
         return true
       }
 
       MotionEvent.ACTION_UP,
       MotionEvent.ACTION_CANCEL -> {
-        if (activeTouchWidgetId == appWidgetId) {
-          placementsById[appWidgetId]?.let { onWidgetPlacementCommitted?.invoke(it) }
-        }
-        resetTouchState()
+        finishActiveEditTouch()
         return true
       }
     }
@@ -315,6 +252,64 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
     val view = widgetViews[placement.appWidgetId] ?: return
     view.layoutParams = layoutParamsFor(placement)
     view.requestLayout()
+  }
+
+  private fun startEditTouch(
+    appWidgetId: Int,
+    placement: WidgetPlacement,
+    localX: Float,
+    localY: Float,
+    rawX: Float,
+    rawY: Float,
+    disallowIntercept: () -> Unit,
+  ) {
+    activeTouchWidgetId = appWidgetId
+    focusWidget(appWidgetId)
+    activeResizeHandle = resizeHandleAt(localX, localY, placement)
+    activeMode = if (activeResizeHandle != ResizeHandle.NONE) TouchMode.RESIZE else TouchMode.DRAG
+    if (activeMode == TouchMode.DRAG) onWidgetDragStateChanged?.invoke(true)
+    touchStartRawX = rawX
+    touchStartRawY = rawY
+    touchStartX = placement.x
+    touchStartY = placement.y
+    touchStartWidth = placement.width
+    touchStartHeight = placement.height
+    disallowIntercept()
+  }
+
+  private fun handleActiveEditTouchMove(rawX: Float, rawY: Float) {
+    val appWidgetId = activeTouchWidgetId ?: return
+    val placement = placementsById[appWidgetId] ?: return
+    val deltaX = (rawX - touchStartRawX).toInt()
+    val deltaY = (rawY - touchStartRawY).toInt()
+    val nextPlacement = when (activeMode) {
+      TouchMode.DRAG -> dragPlacement(placement, deltaX, deltaY, appWidgetId)
+      TouchMode.RESIZE -> resizePlacement(placement, deltaX, deltaY)
+      TouchMode.NONE -> placement
+    }
+    updatePlacement(nextPlacement)
+    onWidgetPlacementChanging?.invoke(nextPlacement)
+  }
+
+  private fun finishActiveEditTouch() {
+    val appWidgetId = activeTouchWidgetId
+    if (appWidgetId != null) {
+      placementsById[appWidgetId]?.let { onWidgetPlacementCommitted?.invoke(it) }
+    }
+    resetTouchState()
+  }
+
+  private fun dragPlacement(
+    placement: WidgetPlacement,
+    deltaX: Int,
+    deltaY: Int,
+    appWidgetId: Int,
+  ): WidgetPlacement {
+    var nextX = (touchStartX + deltaX).coerceIn(0, (width - placement.width).coerceAtLeast(0))
+    var nextY = (touchStartY + deltaY).coerceIn(0, (height - placement.height).coerceAtLeast(0))
+    nextX = snapCoordinate(nextX, placement.width, true, appWidgetId) ?: nextX
+    nextY = snapCoordinate(nextY, placement.height, false, appWidgetId) ?: nextY
+    return placement.copy(x = nextX, y = nextY, lastUpdated = System.currentTimeMillis())
   }
 
   private fun resetTouchState() {
@@ -564,53 +559,48 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
   }
 
   private fun snapCoordinate(coord: Int, size: Int, isHorizontal: Boolean, excludeWidgetId: Int): Int? {
-    var bestSnap: Int? = null
-    var bestDistance = snapThresholdPx + 1
+    val candidates = mutableListOf<Int>()
+    gridSnapCandidate(coord, size)?.let(candidates::add)
+    candidates += widgetSnapCandidates(size, isHorizontal, excludeWidgetId)
+    val snapped = chooseNearestCandidate(coord, candidates)
+    val maxBound = if (isHorizontal) (width - size).coerceAtLeast(0) else (height - size).coerceAtLeast(0)
+    return snapped?.coerceIn(0, maxBound)
+  }
 
+  private fun gridSnapCandidate(coord: Int, size: Int): Int? {
     val currentCenter = coord + size / 2
-    val gridSnappedCenter = (currentCenter / gridSizePx) * gridSizePx
-    val gridSnapX = gridSnappedCenter - size / 2
+    val snappedCenter = (currentCenter / gridSizePx) * gridSizePx
+    return snappedCenter - size / 2
+  }
 
-    val gridDist = abs(coord - gridSnapX)
-    if (gridDist <= snapThresholdPx && gridDist < bestDistance) {
-      bestSnap = gridSnapX
-      bestDistance = gridDist
-    }
-
-    // Snap to other widget centers and edges
+  private fun widgetSnapCandidates(size: Int, isHorizontal: Boolean, excludeWidgetId: Int): List<Int> {
+    val candidates = mutableListOf<Int>()
     for ((id, otherPlacement) in placementsById) {
       if (id == excludeWidgetId) continue
-
       if (isHorizontal) {
-        // Snap to left/right edges and center
-        listOf(
-          otherPlacement.x,                                   // snap to left edge
-          otherPlacement.x + otherPlacement.width,           // snap to right edge
-          otherPlacement.x + otherPlacement.width / 2 - size / 2  // snap centers
-        ).forEach { snapPos ->
-          val distance = abs(coord - snapPos)
-          if (distance <= snapThresholdPx && distance < bestDistance) {
-            bestSnap = snapPos
-            bestDistance = distance
-          }
-        }
+        candidates += otherPlacement.x
+        candidates += otherPlacement.x + otherPlacement.width
+        candidates += otherPlacement.x + otherPlacement.width / 2 - size / 2
       } else {
-        // Snap to top/bottom edges and center
-        listOf(
-          otherPlacement.y,                                   // snap to top edge
-          otherPlacement.y + otherPlacement.height,          // snap to bottom edge
-          otherPlacement.y + otherPlacement.height / 2 - size / 2  // snap centers
-        ).forEach { snapPos ->
-          val distance = abs(coord - snapPos)
-          if (distance <= snapThresholdPx && distance < bestDistance) {
-            bestSnap = snapPos
-            bestDistance = distance
-          }
-        }
+        candidates += otherPlacement.y
+        candidates += otherPlacement.y + otherPlacement.height
+        candidates += otherPlacement.y + otherPlacement.height / 2 - size / 2
       }
     }
+    return candidates
+  }
 
-    return bestSnap?.coerceIn(0, if (isHorizontal) (width - size).coerceAtLeast(0) else (height - size).coerceAtLeast(0))
+  private fun chooseNearestCandidate(coord: Int, candidates: List<Int>): Int? {
+    var bestSnap: Int? = null
+    var bestDistance = snapThresholdPx + 1
+    for (candidate in candidates) {
+      val distance = abs(coord - candidate)
+      if (distance <= snapThresholdPx && distance < bestDistance) {
+        bestSnap = candidate
+        bestDistance = distance
+      }
+    }
+    return bestSnap
   }
 
   private fun layoutParamsFor(placement: WidgetPlacement): LayoutParams {

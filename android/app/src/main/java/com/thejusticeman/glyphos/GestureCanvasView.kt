@@ -144,139 +144,134 @@ class GestureCanvasView(context: Context) : View(context) {
 
   override fun onTouchEvent(event: MotionEvent): Boolean {
     when (event.actionMasked) {
-      MotionEvent.ACTION_DOWN -> {
-        removeCallbacks(longPressRunnable)
-        longPressTriggered = false
-        pinching = false
-        suppressGestureUntilAllPointersUp = false
-        downX = event.x
-        downY = event.y
-        pressedIcon = hitTestIcon(event.x, event.y)
-        if (editMode) {
-          rawPoints.clear()
-          path.reset()
-          clearGestureGhost()
-          pressedIcon?.let { icon -> beginIconDrag(icon, event.x, event.y) }
-          invalidate()
-          return true
-        }
-        rawPoints.clear()
-        path.reset()
-        addGesturePoint(event.x, event.y, event.eventTime, updateGhost = false)
-        path.moveTo(event.x, event.y)
-        postDelayed(longPressRunnable, LONG_PRESS_MS)
-        invalidate()
-        return true
+      MotionEvent.ACTION_DOWN -> return handleActionDown(event)
+      MotionEvent.ACTION_POINTER_DOWN -> return handlePointerDown(event)
+      MotionEvent.ACTION_MOVE -> return handleActionMove(event)
+      MotionEvent.ACTION_POINTER_UP -> return handlePointerUp(event)
+      MotionEvent.ACTION_UP -> return handleActionUp(event)
+      MotionEvent.ACTION_CANCEL -> return handleActionCancel()
+    }
+    return true
+  }
+
+  private fun handleActionDown(event: MotionEvent): Boolean {
+    removeCallbacks(longPressRunnable)
+    longPressTriggered = false
+    pinching = false
+    suppressGestureUntilAllPointersUp = false
+    downX = event.x
+    downY = event.y
+    pressedIcon = hitTestIcon(event.x, event.y)
+    if (editMode) {
+      clearNow()
+      pressedIcon?.let { icon -> beginIconDrag(icon, event.x, event.y) }
+      invalidate()
+      return true
+    }
+    rawPoints.clear()
+    path.reset()
+    addGesturePoint(event.x, event.y, event.eventTime, updateGhost = false)
+    path.moveTo(event.x, event.y)
+    postDelayed(longPressRunnable, LONG_PRESS_MS)
+    invalidate()
+    return true
+  }
+
+  private fun handlePointerDown(event: MotionEvent): Boolean {
+    if (event.pointerCount >= 2) {
+      beginPinch(event)
+    }
+    return true
+  }
+
+  private fun handleActionMove(event: MotionEvent): Boolean {
+    if (draggingPackageName != null) {
+      updateIconDrag(event.x, event.y)
+      return true
+    }
+    if (pinching) {
+      updatePinch(event)
+      return true
+    }
+    if (suppressGestureUntilAllPointersUp) {
+      clearNow()
+      return true
+    }
+    if (event.pointerCount >= 2) {
+      beginPinch(event)
+      return true
+    }
+    if (longPressTriggered) return true
+
+    val totalMovement = hypot((event.x - downX).toDouble(), (event.y - downY).toDouble())
+    if (totalMovement > LONG_PRESS_CANCEL_PX) {
+      removeCallbacks(longPressRunnable)
+    }
+
+    addGesturePoint(event.x, event.y, event.eventTime, updateGhost = !isTap(event.x, event.y))
+    path.lineTo(event.x, event.y)
+    invalidate()
+    return true
+  }
+
+  private fun handlePointerUp(event: MotionEvent): Boolean {
+    if (draggingPackageName != null) {
+      finishIconDrag(commit = true)
+    }
+    if (pinching && event.pointerCount <= 2) {
+      finishPinch()
+    }
+    return true
+  }
+
+  private fun handleActionUp(event: MotionEvent): Boolean {
+    removeCallbacks(longPressRunnable)
+    if (draggingPackageName != null) {
+      finishIconDrag(commit = true)
+      return true
+    }
+    if (pinching) {
+      finishPinch()
+      suppressGestureUntilAllPointersUp = false
+      return true
+    }
+    if (suppressGestureUntilAllPointersUp) {
+      suppressGestureUntilAllPointersUp = false
+      clearNow()
+      return true
+    }
+    if (longPressTriggered) {
+      longPressTriggered = false
+      clearNow()
+      return true
+    }
+    if (editMode) {
+      if (pressedIcon == null && isTap(event.x, event.y)) {
+        editMode = false
       }
-
-      MotionEvent.ACTION_POINTER_DOWN -> {
-        if (event.pointerCount >= 2) {
-          beginPinch(event)
-        }
-        return true
-      }
-
-      MotionEvent.ACTION_MOVE -> {
-        if (draggingPackageName != null) {
-          updateIconDrag(event.x, event.y)
-          return true
-        }
-
-        if (pinching) {
-          updatePinch(event)
-          return true
-        }
-
-        if (suppressGestureUntilAllPointersUp) {
-          clearNow()
-          return true
-        }
-
-        if (event.pointerCount >= 2) {
-          beginPinch(event)
-          return true
-        }
-
-        if (longPressTriggered) return true
-
-        val totalMovement = hypot((event.x - downX).toDouble(), (event.y - downY).toDouble())
-        if (totalMovement > LONG_PRESS_CANCEL_PX) {
-          removeCallbacks(longPressRunnable)
-        }
-
-        addGesturePoint(event.x, event.y, event.eventTime, updateGhost = !isTap(event.x, event.y))
-        path.lineTo(event.x, event.y)
-        invalidate()
-        return true
-      }
-
-      MotionEvent.ACTION_POINTER_UP -> {
-        if (draggingPackageName != null) {
-          finishIconDrag(commit = true)
-        }
-        if (pinching && event.pointerCount <= 2) {
-          finishPinch()
-        }
-        return true
-      }
-
-      MotionEvent.ACTION_UP -> {
-        removeCallbacks(longPressRunnable)
-        if (draggingPackageName != null) {
-          finishIconDrag(commit = true)
-          return true
-        }
-
-        if (pinching) {
-          finishPinch()
-          suppressGestureUntilAllPointersUp = false
-          return true
-        }
-
-        if (suppressGestureUntilAllPointersUp) {
-          suppressGestureUntilAllPointersUp = false
-          clearNow()
-          return true
-        }
-
-        if (longPressTriggered) {
-          longPressTriggered = false
-          clearNow()
-          return true
-        }
-
-        if (editMode) {
-          if (pressedIcon == null && isTap(event.x, event.y)) {
-            editMode = false
-          }
-          clearNow()
-          return true
-        }
-
-        if (isTap(event.x, event.y)) {
-          (pressedIcon ?: hitTestIcon(event.x, event.y))?.let { icon ->
-            clearNow()
-            onIconTapped?.invoke(icon.app)
-            return true
-          }
-        }
-
-        clearGestureGhost()
-        normalizeTo40Points(rawPoints)?.let { onGestureComplete?.invoke(it) }
-        postDelayed({ clearNow() }, CLEAR_CANVAS_MS)
-        return true
-      }
-
-      MotionEvent.ACTION_CANCEL -> {
-        removeCallbacks(longPressRunnable)
-        longPressTriggered = false
-        pinching = false
-        suppressGestureUntilAllPointersUp = false
-        finishIconDrag(commit = false)
+      clearNow()
+      return true
+    }
+    if (isTap(event.x, event.y)) {
+      (pressedIcon ?: hitTestIcon(event.x, event.y))?.let { icon ->
         clearNow()
+        onIconTapped?.invoke(icon.app)
         return true
       }
     }
+    clearGestureGhost()
+    normalizeTo40Points(rawPoints)?.let { onGestureComplete?.invoke(it) }
+    postDelayed({ clearNow() }, CLEAR_CANVAS_MS)
+    return true
+  }
+
+  private fun handleActionCancel(): Boolean {
+    removeCallbacks(longPressRunnable)
+    longPressTriggered = false
+    pinching = false
+    suppressGestureUntilAllPointersUp = false
+    finishIconDrag(commit = false)
+    clearNow()
     return true
   }
 
@@ -344,12 +339,7 @@ class GestureCanvasView(context: Context) : View(context) {
     val currentByPackage = displayedLauncherIcons.associateBy { it.app.packageName }
     displayedLauncherIcons = icons.map { target ->
       currentByPackage[target.app.packageName]?.let { current ->
-        target.copy(
-          sizePx = current.sizePx,
-          radiusPx = current.radiusPx,
-          x = current.x,
-          y = current.y,
-        )
+        target.copy(sizePx = current.sizePx, radiusPx = current.radiusPx, x = current.x, y = current.y)
       } ?: target
     }
     postInvalidateOnAnimation()
@@ -447,11 +437,18 @@ class GestureCanvasView(context: Context) : View(context) {
   }
 
   private fun moveDisplayedIcon(packageName: String, x: Double, y: Double) {
-    displayedLauncherIcons = displayedLauncherIcons.map { icon ->
-      if (icon.app.packageName == packageName) icon.copy(x = x, y = y) else icon
-    }
-    targetLauncherIcons = targetLauncherIcons.map { icon ->
-      if (icon.app.packageName == packageName) icon.copy(x = x, y = y) else icon
+    val transform: (LauncherIconNode) -> LauncherIconNode = { icon -> icon.copy(x = x, y = y) }
+    displayedLauncherIcons = transformIconsByPackage(displayedLauncherIcons, packageName, transform)
+    targetLauncherIcons = transformIconsByPackage(targetLauncherIcons, packageName, transform)
+  }
+
+  private fun transformIconsByPackage(
+    icons: List<LauncherIconNode>,
+    packageName: String,
+    transform: (LauncherIconNode) -> LauncherIconNode,
+  ): List<LauncherIconNode> {
+    return icons.map { icon ->
+      if (icon.app.packageName == packageName) transform(icon) else icon
     }
   }
 
