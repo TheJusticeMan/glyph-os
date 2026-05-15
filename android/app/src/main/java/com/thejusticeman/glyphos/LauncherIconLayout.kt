@@ -64,8 +64,8 @@ object LauncherIconLayout {
       val anchorPosition = anchorPositions[app.packageName]
       val fixedPosition = fixedPositions[app.packageName]
       val targetAnchor = fixedPosition ?: anchorPosition ?: anchor
-      val startX = fixedPosition?.x ?: previous?.x ?: anchor.x
-      val startY = fixedPosition?.y ?: previous?.y ?: anchor.y
+      val startX = fixedPosition?.x ?: previous?.x ?: anchorPosition?.x ?: anchor.x
+      val startY = fixedPosition?.y ?: previous?.y ?: anchorPosition?.y ?: anchor.y
       MutableNode(
         app = app,
         launchCount = count,
