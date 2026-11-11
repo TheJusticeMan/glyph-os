@@ -51,6 +51,11 @@ class GestureCanvasView(context: Context) : View(context) {
       field = value.coerceIn(ICON_SCALE_MIN, ICON_SCALE_MAX)
       invalidate()
     }
+  var gesturePathsByPackage: Map<String, List<Point>> = emptyMap()
+    set(value) {
+      field = value
+      invalidate()
+    }
   var trailEffect: Boolean = false
     set(value) {
       field = value
@@ -87,6 +92,13 @@ class GestureCanvasView(context: Context) : View(context) {
   private val fallbackIconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     alpha = 180
+  }
+  private val launcherGesturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
+    style = Paint.Style.STROKE
+    strokeCap = Paint.Cap.ROUND
+    strokeJoin = Paint.Join.ROUND
+    strokeWidth = dp(3).toFloat()
   }
   private val trailParticlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
@@ -501,16 +513,51 @@ class GestureCanvasView(context: Context) : View(context) {
       val bottom = icon.y.toInt() + halfSize
       iconBounds.set(left, top, right, bottom)
 
-      val drawable = icon.app.icon
-      if (drawable == null) {
-        canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), (icon.radiusPx * iconScale).toFloat(), fallbackIconPaint)
+      val gesturePath = gesturePathsByPackage[icon.app.packageName]
+      if (gesturePath != null && gesturePath.size >= 2) {
+        canvas.drawPath(buildLauncherGesturePath(gesturePath, left.toFloat(), top.toFloat(), scaledSize.toFloat()), launcherGesturePaint)
       } else {
-        drawable.setBounds(iconBounds)
-        drawable.draw(canvas)
+        val drawable = icon.app.icon
+        if (drawable == null) {
+          canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), (icon.radiusPx * iconScale).toFloat(), fallbackIconPaint)
+        } else {
+          drawable.setBounds(iconBounds)
+          drawable.draw(canvas)
+        }
       }
 
       if (scaledSize >= dp(LABEL_MIN_ICON_DP)) {
         drawIconLabel(canvas, icon, scaledSize)
+      }
+    }
+  }
+
+  private fun buildLauncherGesturePath(points: List<Point>, left: Float, top: Float, size: Float): Path {
+    var minX = Double.POSITIVE_INFINITY
+    var minY = Double.POSITIVE_INFINITY
+    var maxX = Double.NEGATIVE_INFINITY
+    var maxY = Double.NEGATIVE_INFINITY
+
+    points.forEach { point ->
+      if (point.x < minX) minX = point.x
+      if (point.y < minY) minY = point.y
+      if (point.x > maxX) maxX = point.x
+      if (point.y > maxY) maxY = point.y
+    }
+
+    val sourceWidth = (maxX - minX).takeIf { it != 0.0 } ?: 1.0
+    val sourceHeight = (maxY - minY).takeIf { it != 0.0 } ?: 1.0
+    val padding = size * 0.12f
+    val available = (size - padding * 2f).coerceAtLeast(1f)
+    val scale = available / maxOf(sourceWidth, sourceHeight).toFloat()
+    val offsetX = left + padding + (available - sourceWidth.toFloat() * scale) / 2f
+    val offsetY = top + padding + (available - sourceHeight.toFloat() * scale) / 2f
+
+    return Path().apply {
+      points.forEachIndexed { index, point ->
+        val x = ((point.x - minX).toFloat() * scale) + offsetX
+        val y = ((point.y - minY).toFloat() * scale) + offsetY
+        if (index == 0) moveTo(x, y) else lineTo(x, y)
       }
     }
   }

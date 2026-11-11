@@ -10,6 +10,7 @@ import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -61,8 +62,14 @@ class MainActivity : Activity() {
   internal var pendingWidgetAllocationId: Int? = null
   internal val activeDialogs = mutableSetOf<Dialog>()
   internal var trashDropTargetMode: TrashDropTargetMode = TrashDropTargetMode.ICON_RESET
+  internal var homePerfSequence: Int = 0
+  internal var homePerfReason: String? = null
+  internal var homePerfStartMs: Long = 0L
+  internal var lastPauseAtMs: Long = 0L
+  internal var widgetRebindGeneration: Int = 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    startHomePerf("onCreate")
     setTheme(R.style.AppTheme)
     super.onCreate(savedInstanceState)
 
@@ -76,16 +83,31 @@ class MainActivity : Activity() {
     homeIconAnchorStore = HomeIconAnchorStore(this)
     widgetHost = AppWidgetHost(this, WIDGET_HOST_ID)
     installedApps = InstalledApps(this)
+    installedApps.startPackageMonitor {
+      refreshInstalledAppCache { apps ->
+        updateLauncherIcons(apps)
+      }
+    }
     launchUsageStore = LaunchUsageStore(this)
     launchCounts = launchUsageStore.getLaunchCounts()
     homeIconAnchors = homeIconAnchorStore.loadAnchors()
     savedGestures = gestureStore.loadGestures().toMutableList()
     widgetPlacements = widgetStore.loadPlacements().associateBy { it.appWidgetId }.toMutableMap()
     seedDefaultGesturesIfNeeded()
+    markHomePerf(
+      stage = "stores-loaded",
+      details = "gestures=${savedGestures.size} widgets=${widgetPlacements.size} launchCounts=${launchCounts.size} anchors=${homeIconAnchors.size}",
+    )
 
     setContentView(buildRootView())
+    markHomePerf("content-view-ready")
     updateLauncherIcons()
-    refreshInstalledAppCache { updateLauncherIcons(it) }
+    refreshInstalledAppCache {
+      markHomePerf("refreshInstalledAppCache-callback", "apps=${it.size}")
+      updateLauncherIcons(it)
+      scheduleWidgetRebindRetries("refreshInstalledAppCache")
+      finishHomePerf("refreshInstalledAppCache-callback")
+    }
 
     if (!settings.onboardingDone) {
       showOnboardingDialog()
@@ -98,8 +120,13 @@ class MainActivity : Activity() {
   }
 
   override fun onPause() {
+    lastPauseAtMs = SystemClock.elapsedRealtime()
     dismissActiveDialogs()
     super.onPause()
+  }
+
+  override fun onResume() {
+    super.onResume()
   }
 
   @Deprecated("Deprecated in Java")
@@ -137,11 +164,15 @@ class MainActivity : Activity() {
       }
 
       REQUEST_CREATE_WIDGET -> {
-        val appWidgetId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+        val appWidgetId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
+          ?.takeIf { it > 0 }
+          ?: pendingWidgetAllocationId
+          ?: -1
+        pendingWidgetAllocationId = null
         if (resultCode == RESULT_OK && appWidgetId > 0) {
           addWidgetPlacement(appWidgetId, configured = true)
-        } else {
-          releaseWidgetIdFromIntent(data)
+        } else if (appWidgetId > 0) {
+          releaseWidgetId(appWidgetId)
         }
       }
     }
@@ -149,11 +180,39 @@ class MainActivity : Activity() {
 
   override fun onStart() {
     super.onStart()
+    if (!isHomePerfActive()) {
+      startHomePerf("onStart")
+    } else {
+      markHomePerf("onStart-reentered", "reason=${homePerfReason.orEmpty()}")
+    }
     widgetHost.startListening()
+    markHomePerf("widgetHost-startListening")
     restoreWidgets()
+    markHomePerf("restoreWidgets-finished")
+    scheduleWidgetRebindRetries("onStart")
+    mainHandler.post {
+      markHomePerf("post-first-main-loop")
+    }
+    mainHandler.postDelayed({
+      finishHomePerf("onStart-timeout")
+    }, 5_000L)
+  }
+
+  override fun onRestart() {
+    super.onRestart()
+    markHomePerf("onRestart")
+  }
+
+  override fun onNewIntent(intent: Intent?) {
+    super.onNewIntent(intent)
+    markHomePerf("onNewIntent")
+    if (intent != null) {
+      setIntent(intent)
+    }
   }
 
   override fun onStop() {
+    widgetRebindGeneration += 1
     if (homeIconResetState == null) {
       persistHomeIconAnchors()
     }
@@ -162,6 +221,7 @@ class MainActivity : Activity() {
   }
 
   override fun onDestroy() {
+    installedApps.stopPackageMonitor()
     mainHandler.removeCallbacksAndMessages(null)
     appRefreshExecutor.shutdownNow()
     if (::widgetLayerView.isInitialized) {
@@ -235,6 +295,35 @@ class MainActivity : Activity() {
     root.addView(bottomSettingsBar)
     trashDropTargetView = buildTrashDropTarget()
     root.addView(trashDropTargetView)
+    syncLauncherGesturePaths()
     return root
+  }
+
+  internal fun startHomePerf(reason: String) {
+    // Logging disabled.
+  }
+
+  internal fun isHomePerfActive(): Boolean {
+    return false
+  }
+
+  internal fun markHomePerf(stage: String, details: String = "") {
+    // Logging disabled.
+  }
+
+  internal fun finishHomePerf(finalStage: String) {
+    // Logging disabled.
+  }
+
+  internal fun scheduleWidgetRebindRetries(reason: String) {
+    if (widgetPlacements.isEmpty()) return
+
+    widgetRebindGeneration += 1
+    val generation = widgetRebindGeneration
+    mainHandler.post {
+      if (generation != widgetRebindGeneration) return@post
+      if (isFinishing || isDestroyed || !isWidgetLayerViewInitialized) return@post
+      restoreWidgets()
+    }
   }
 }

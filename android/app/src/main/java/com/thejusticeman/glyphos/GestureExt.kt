@@ -290,6 +290,16 @@ internal fun MainActivity.previewColumn(title: String, points: List<Point>, prev
 
 internal fun MainActivity.persistGestures() {
   gestureStore.saveGestures(savedGestures)
+  syncLauncherGesturePaths()
+}
+
+internal fun MainActivity.syncLauncherGesturePaths() {
+  if (!isCanvasViewInitialized) return
+  canvasView.gesturePathsByPackage = savedGestures
+    .asSequence()
+    .filter { it.packageName != null && it.normalizedPath.size >= 2 }
+    .groupBy { it.packageName!! }
+    .mapValues { (_, gestures) -> gestures.first().normalizedPath }
 }
 
 internal fun MainActivity.seedDefaultGesturesIfNeeded() {

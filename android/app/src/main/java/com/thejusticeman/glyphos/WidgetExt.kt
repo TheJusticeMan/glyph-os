@@ -1,12 +1,14 @@
 package com.thejusticeman.glyphos
 
 import android.app.Dialog
+import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -16,7 +18,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import kotlin.math.roundToInt
 
 // Widget lifecycle: discovery, binding, placement, removal, and host view management.
 
@@ -45,6 +46,7 @@ internal fun MainActivity.restoreWidgets() {
 
     val hostView = widgetHost.createView(this, placement.appWidgetId, providerInfo)
     widgetLayerView.addWidgetView(hostView, resolvedPlacement)
+    refreshWidgetHostView(hostView, resolvedPlacement, providerInfo, manager)
   }
 
   if (invalidWidgetIds.isNotEmpty()) {
@@ -175,15 +177,25 @@ internal fun MainActivity.continueWidgetBinding(appWidgetId: Int) {
 
   val configComponent = providerInfo.configure
   if (configComponent == null) {
+    pendingWidgetAllocationId = null
     addWidgetPlacement(appWidgetId, configured = true)
     return
   }
 
-  val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
-    component = configComponent
-    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+  pendingWidgetAllocationId = appWidgetId
+  try {
+    widgetHost.startAppWidgetConfigureActivityForResult(
+      this,
+      appWidgetId,
+      0,
+      REQUEST_CREATE_WIDGET,
+      null,
+    )
+  } catch (_: Exception) {
+    pendingWidgetAllocationId = null
+    releaseWidgetId(appWidgetId)
+    showFeedback("Widget setup unavailable")
   }
-  startActivityForResult(intent, REQUEST_CREATE_WIDGET)
 }
 
 internal fun MainActivity.addWidgetPlacement(appWidgetId: Int, configured: Boolean) {
@@ -226,40 +238,56 @@ internal fun MainActivity.addWidgetPlacement(appWidgetId: Int, configured: Boole
 
   val hostView = widgetHost.createView(this, appWidgetId, providerInfo)
   widgetLayerView.addWidgetView(hostView, placement)
+  refreshWidgetHostView(hostView, placement, providerInfo, manager)
   widgetLayerView.updateLayout(widgetPlacements.values.toList())
 }
 
-internal fun MainActivity.showRemoveWidgetDialog() {
-  if (widgetPlacements.isEmpty()) {
-    return
-  }
-
-  val manager = AppWidgetManager.getInstance(this)
-  val dialog = fullScreenDialog()
-  val root = screenDialogRoot("Remove Widget")
-  val list = LinearLayout(this).apply {
-    orientation = LinearLayout.VERTICAL
-    setPadding(0, dp(4), 0, dp(12))
-  }
-
-  widgetPlacements.values.sortedBy { it.appWidgetId }.forEach { placement ->
-    val providerInfo = manager.getAppWidgetInfo(placement.appWidgetId)
-    val label = providerInfo?.loadLabel(packageManager)?.toString().orEmpty().ifBlank {
-      "Widget #${placement.appWidgetId}"
+internal fun MainActivity.refreshWidgetHostView(
+  hostView: AppWidgetHostView,
+  placement: WidgetPlacement,
+  providerInfo: AppWidgetProviderInfo,
+  manager: AppWidgetManager,
+) {
+  val options = widgetOptionsForPlacement(placement)
+  runCatching {
+    val current = manager.getAppWidgetOptions(placement.appWidgetId)
+    val changed =
+      current.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH) != options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH) ||
+        current.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT) != options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT) ||
+        current.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH) != options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH) ||
+        current.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT) != options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)
+    if (changed) {
+      manager.updateAppWidgetOptions(placement.appWidgetId, options)
     }
-    val subtitle = providerInfo?.provider?.flattenToShortString() ?: placement.provider
-    list.addView(widgetRemovalRow(label, subtitle, placement, providerInfo, dialog))
-    list.addView(settingDivider())
   }
 
-  val scroll = ScrollView(this).apply { addView(list) }
-  root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+  runCatching {
+    // Nudge providers (for clocks/weather widgets) to push RemoteViews after cold boot.
+    sendBroadcast(
+      Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE)
+        .setComponent(providerInfo.provider)
+        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, intArrayOf(placement.appWidgetId)),
+    )
+  }
 
-  dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-  dialog.setContentView(root)
-  trackDialog(dialog)
-  dialog.show()
-  expandDialog(dialog)
+  hostView.requestLayout()
+  hostView.invalidate()
+}
+
+internal fun MainActivity.widgetOptionsForPlacement(placement: WidgetPlacement): Bundle {
+  val density = resources.displayMetrics.density.coerceAtLeast(0.1f)
+  fun toDp(px: Int): Int = (px / density).toInt().coerceAtLeast(1)
+
+  val minWidthDp = toDp(placement.minWidth.coerceAtLeast(placement.width))
+  val minHeightDp = toDp(placement.minHeight.coerceAtLeast(placement.height))
+  val maxWidthDp = toDp(placement.width)
+  val maxHeightDp = toDp(placement.height)
+  return Bundle().apply {
+    putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, minWidthDp)
+    putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, minHeightDp)
+    putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, maxWidthDp)
+    putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, maxHeightDp)
+  }
 }
 
 internal fun MainActivity.removeWidget(appWidgetId: Int) {
@@ -350,54 +378,4 @@ internal fun MainActivity.widgetProviderAppLabel(providerInfo: AppWidgetProvider
     val applicationInfo = packageManager.getApplicationInfo(packageName, 0)
     packageManager.getApplicationLabel(applicationInfo).toString()
   }.getOrDefault(packageName)
-}
-
-internal fun MainActivity.widgetRemovalRow(
-  label: String,
-  subtitle: String,
-  placement: WidgetPlacement,
-  providerInfo: android.appwidget.AppWidgetProviderInfo?,
-  ownerDialog: Dialog,
-): View {
-  val row = LinearLayout(this).apply {
-    orientation = LinearLayout.VERTICAL
-    setPadding(0, dp(10), 0, dp(10))
-  }
-
-  val header = LinearLayout(this).apply {
-    orientation = LinearLayout.HORIZONTAL
-    gravity = Gravity.CENTER_VERTICAL
-  }
-  header.addView(settingsTextColumn(label, subtitle, destructive = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-  header.addView(primaryButton("Remove") {
-    showConfirmDialog(
-      title = "Remove Widget",
-      message = "Remove $label from your home surface?",
-      confirmText = "Remove",
-    ) {
-      removeWidget(placement.appWidgetId)
-      ownerDialog.dismiss()
-    }
-  })
-  row.addView(header)
-
-  if (providerInfo != null) {
-    val preview = runCatching {
-      widgetHost.createView(this, placement.appWidgetId, providerInfo)
-    }.getOrNull()
-    if (preview != null) {
-      preview.isEnabled = false
-      preview.isClickable = false
-      val maxPreviewWidth = resources.displayMetrics.widthPixels - dp(64)
-      val scaledWidth = placement.width.coerceAtMost(maxPreviewWidth).coerceAtLeast(dp(120))
-      val scaledHeight = ((scaledWidth.toFloat() / placement.width.coerceAtLeast(1)) * placement.height)
-        .roundToInt()
-        .coerceIn(dp(64), dp(220))
-      row.addView(preview, LinearLayout.LayoutParams(scaledWidth, scaledHeight).apply {
-        topMargin = dp(8)
-      })
-    }
-  }
-
-  return row
 }

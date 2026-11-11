@@ -1,9 +1,11 @@
 package com.thejusticeman.glyphos
 
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -26,7 +28,8 @@ internal fun MainActivity.buildBottomSettingsBar(): View {
   val bar = LinearLayout(this).apply {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER
-    setPadding(dp(8), dp(6), dp(8), dp(6))
+    setPadding(dp(8), dp(10), dp(8), dp(10))
+    minimumHeight = dp(84)
     background = GradientDrawable().apply {
       setColor(Color.argb(190, 18, 18, 18))
       cornerRadius = dp(8).toFloat()
@@ -36,9 +39,10 @@ internal fun MainActivity.buildBottomSettingsBar(): View {
     visibility = if (canvasView.editMode) View.VISIBLE else View.GONE
   }
 
-  bar.addView(bottomSettingsButton("Settings", ::showManagementDialog), bottomSettingsButtonParams())
-  bar.addView(bottomSettingsButton("Gestures", ::showGestureLibraryDialog), bottomSettingsButtonParams())
-  bar.addView(bottomSettingsButton("Add Widget", ::showWidgetPickerDialog), bottomSettingsButtonParams())
+  bar.addView(bottomSettingsButton("Settings", R.drawable.ic_lucide_settings, ::showManagementDialog), bottomSettingsButtonParams())
+  bar.addView(bottomSettingsButton("Gestures", R.drawable.ic_lucide_pen_tool, ::showGestureLibraryDialog), bottomSettingsButtonParams())
+  bar.addView(bottomSettingsButton("Widgets", R.drawable.ic_lucide_layout_grid, ::showWidgetPickerDialog), bottomSettingsButtonParams())
+  bar.addView(bottomSettingsButton("Wallpaper", R.drawable.ic_lucide_image, ::openWallpaperChooser), bottomSettingsButtonParams())
 
   return bar.apply {
     layoutParams = FrameLayout.LayoutParams(
@@ -53,13 +57,23 @@ internal fun MainActivity.buildBottomSettingsBar(): View {
   }
 }
 
-internal fun MainActivity.bottomSettingsButton(text: String, onClick: () -> Unit): Button {
+internal fun MainActivity.bottomSettingsButton(text: String, iconRes: Int, onClick: () -> Unit): Button {
   return Button(this).apply {
     this.text = text
-    textSize = 13f
-    minHeight = dp(44)
-    minimumHeight = dp(44)
-    setPadding(dp(6), 0, dp(6), 0)
+    textSize = 12f
+    setTextColor(Color.WHITE)
+    isAllCaps = false
+    setBackgroundColor(Color.TRANSPARENT)
+    backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+    minHeight = dp(68)
+    minimumHeight = dp(68)
+    gravity = Gravity.CENTER
+    setPadding(dp(6), dp(6), dp(6), dp(6))
+    setCompoundDrawablesWithIntrinsicBounds(0, iconRes, 0, 0)
+    compoundDrawablePadding = dp(4)
+    compoundDrawableTintList = ColorStateList.valueOf(Color.WHITE)
+    maxLines = 1
+    ellipsize = TextUtils.TruncateAt.END
     setOnClickListener { onClick() }
   }
 }
@@ -168,23 +182,6 @@ internal fun MainActivity.showManagementDialog() {
   list.addView(settingsSwitchRow("Auto-pick only search result", "Choose the app automatically when search leaves one match", settings.autoPickOnlySearchResult) { checked ->
     settings.autoPickOnlySearchResult = checked
   })
-  list.addView(settingDivider())
-  list.addView(settingsActionRow("Gestures", "Reassign or delete saved gesture bindings") {
-    dialog.dismiss()
-    showGestureLibraryDialog()
-  })
-  list.addView(settingDivider())
-  list.addView(settingsActionRow("Add widget", "Place an Android widget on your home surface") {
-    dialog.dismiss()
-    showWidgetPickerDialog()
-  })
-  list.addView(settingDivider())
-  list.addView(settingsActionRow("Remove widget", "Delete a widget from your home surface") {
-    dialog.dismiss()
-    showRemoveWidgetDialog()
-  })
-  list.addView(settingDivider())
-  list.addView(settingsActionRow("Wallpaper", "Open Android wallpaper and style", onClick = ::openWallpaperChooser))
   list.addView(settingDivider())
   list.addView(settingsActionRow("Home app", "Choose the default launcher", onClick = ::openHomeAppSettings))
   list.addView(settingDivider())

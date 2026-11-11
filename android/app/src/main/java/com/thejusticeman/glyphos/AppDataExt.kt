@@ -25,12 +25,30 @@ internal fun MainActivity.cachedAppLabels(): Map<String, String> {
   return cachedInstalledApps().associate { it.packageName to it.label }
 }
 
-internal fun MainActivity.refreshInstalledAppCache(onLoaded: ((List<AppDetail>) -> Unit)? = null) {
+internal fun MainActivity.refreshInstalledAppCache(
+  forceRefresh: Boolean = false,
+  loadMissingIcons: Boolean = true,
+  onLoaded: ((List<AppDetail>) -> Unit)? = null,
+) {
+  markHomePerf("refreshInstalledAppCache-scheduled")
   appRefreshExecutor.execute {
-    val refreshedApps = installedApps.getInstalledApps(forceRefresh = true)
+    val refreshedApps = installedApps.getInstalledApps(forceRefresh = forceRefresh)
     mainHandler.post {
       if (!isFinishing && !isDestroyed) {
+        markHomePerf("refreshInstalledAppCache-onLoaded", "apps=${refreshedApps.size}")
         onLoaded?.invoke(refreshedApps)
+      }
+    }
+
+    if (loadMissingIcons) {
+      val iconFilledApps = installedApps.loadMissingIcons()
+      if (iconFilledApps != null) {
+        mainHandler.post {
+          if (!isFinishing && !isDestroyed) {
+            markHomePerf("refreshInstalledAppCache-icon-fill", "apps=${iconFilledApps.size}")
+            onLoaded?.invoke(iconFilledApps)
+          }
+        }
       }
     }
   }

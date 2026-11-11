@@ -24,7 +24,9 @@ internal data class HomeIconResetState(
 )
 
 internal fun MainActivity.updateLauncherIcons(apps: List<AppDetail> = cachedInstalledApps()) {
-  if (!isCanvasViewInitialized) return
+  if (!isCanvasViewInitialized) {
+    return
+  }
   if (canvasView.width <= 0 || canvasView.height <= 0) {
     canvasView.post { updateLauncherIcons(apps) }
     return
@@ -33,8 +35,9 @@ internal fun MainActivity.updateLauncherIcons(apps: List<AppDetail> = cachedInst
   val minIconSize = dp(HOME_ICON_MIN_DP).toDouble()
   val maxIconSize = dp(HOME_ICON_MAX_DP).toDouble()
   val previousIcons = canvasView.launcherIcons
+  val selectedApps = selectHomeApps(apps, minIconSize, maxIconSize)
   canvasView.launcherIcons = LauncherIconLayout.build(
-    apps = selectHomeApps(apps, minIconSize, maxIconSize),
+    apps = selectedApps,
     launchCounts = launchCounts,
     widthPx = canvasView.width,
     heightPx = canvasView.height,
