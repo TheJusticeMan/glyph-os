@@ -118,8 +118,9 @@ legacy/react-native/             Archived Expo/React Native implementation
 
 ## Documentation
 
+- [docs/codebase.md](docs/codebase.md) maps the native and archived source files, tests, resources, and build configuration.
 - [docs/gesture-math-and-native-android.md](docs/gesture-math-and-native-android.md) records the exact gesture normalization and matching math.
-- [docs/home-icon-layout.md](docs/home-icon-layout.md) explains home icon sizing, anchors, repulsion, edit mode, reset behavior, and tuning constants.
+- [docs/home-icon-layout.md](docs/home-icon-layout.md) explains home icon sizing, anchors, repulsion, edit mode, reset behavior, gesture obstacles, and tuning constants.
 
 ## Notes
 

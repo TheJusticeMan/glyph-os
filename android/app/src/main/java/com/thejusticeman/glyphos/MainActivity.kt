@@ -241,6 +241,7 @@ class MainActivity : Activity() {
 
     canvasView = GestureCanvasView(this).apply {
       trailEffect = settings.trailEffect
+      showGesturePaths = settings.showGesturePaths
       iconScale = settings.homeIconScale
       onGestureComplete = ::handleGestureComplete
       onIconTapped = ::handleLauncherIconTapped

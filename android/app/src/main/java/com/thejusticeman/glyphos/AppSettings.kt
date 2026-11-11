@@ -9,6 +9,7 @@ private const val LAUNCH_ON_CREATE_SHORTCUT_KEY = "glyph_os_launch_on_create_sho
 private const val ALLOW_BACKWARD_GESTURES_KEY = "glyph_os_allow_backward_gestures"
 private const val AUTO_PICK_ONLY_SEARCH_RESULT_KEY = "glyph_os_auto_pick_only_search_result"
 private const val HOME_ICON_SCALE_KEY = "glyph_os_home_icon_scale"
+private const val SHOW_GESTURE_PATHS_KEY = "glyph_os_show_gesture_paths"
 private const val HOME_ICON_SCALE_MIN = 0.0f
 private const val HOME_ICON_SCALE_MAX = 1.0f
 
@@ -38,4 +39,8 @@ class AppSettings(context: Context) {
   var homeIconScale: Float
     get() = preferences.getFloat(HOME_ICON_SCALE_KEY, 0.0f).coerceIn(HOME_ICON_SCALE_MIN, HOME_ICON_SCALE_MAX)
     set(value) = preferences.edit().putFloat(HOME_ICON_SCALE_KEY, value.coerceIn(HOME_ICON_SCALE_MIN, HOME_ICON_SCALE_MAX)).apply()
+
+  var showGesturePaths: Boolean
+    get() = preferences.getBoolean(SHOW_GESTURE_PATHS_KEY, true)
+    set(value) = preferences.edit().putBoolean(SHOW_GESTURE_PATHS_KEY, value).apply()
 }

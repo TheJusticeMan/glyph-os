@@ -183,6 +183,11 @@ internal fun MainActivity.showManagementDialog() {
     settings.autoPickOnlySearchResult = checked
   })
   list.addView(settingDivider())
+  list.addView(settingsSwitchRow("Show gesture paths", "Display custom gesture paths instead of home icons when available", settings.showGesturePaths) { checked ->
+    settings.showGesturePaths = checked
+    canvasView.showGesturePaths = checked
+  })
+  list.addView(settingDivider())
   list.addView(settingsActionRow("Home app", "Choose the default launcher", onClick = ::openHomeAppSettings))
   list.addView(settingDivider())
   list.addView(settingsActionRow("Reset layout", "Put frequent apps near the center of the spiral") {

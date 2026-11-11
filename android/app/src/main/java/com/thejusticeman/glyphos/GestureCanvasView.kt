@@ -56,6 +56,11 @@ class GestureCanvasView(context: Context) : View(context) {
       field = value
       invalidate()
     }
+  var showGesturePaths: Boolean = true
+    set(value) {
+      field = value
+      invalidate()
+    }
   var trailEffect: Boolean = false
     set(value) {
       field = value
@@ -514,7 +519,7 @@ class GestureCanvasView(context: Context) : View(context) {
       iconBounds.set(left, top, right, bottom)
 
       val gesturePath = gesturePathsByPackage[icon.app.packageName]
-      if (gesturePath != null && gesturePath.size >= 2) {
+      if (showGesturePaths && gesturePath != null && gesturePath.size >= 2) {
         canvas.drawPath(buildLauncherGesturePath(gesturePath, left.toFloat(), top.toFloat(), scaledSize.toFloat()), launcherGesturePaint)
       } else {
         val drawable = icon.app.icon
