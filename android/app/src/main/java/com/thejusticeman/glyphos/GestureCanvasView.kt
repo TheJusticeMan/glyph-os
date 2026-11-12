@@ -46,6 +46,8 @@ class GestureCanvasView(context: Context) : View(context) {
     set(value) {
       updateLauncherIconTargets(value)
     }
+  internal val hasSettledLauncherIconLayout: Boolean
+    get() = displayedLauncherIcons == targetLauncherIcons
   var iconScale: Float = 1.0f
     set(value) {
       field = value.coerceIn(ICON_SCALE_MIN, ICON_SCALE_MAX)

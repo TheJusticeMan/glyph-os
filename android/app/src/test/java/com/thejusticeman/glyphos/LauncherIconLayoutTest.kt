@@ -166,6 +166,69 @@ class LauncherIconLayoutTest {
   }
 
   @Test
+  fun gestureGhostLayoutReturnsToCapturedPreGesturePositions() {
+    val app = sampleApps(1).first()
+    val baseline = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 44.0,
+    )
+    val snapshot = GestureGhostLayoutSnapshot()
+    snapshot.rememberIfAbsent(baseline)
+
+    val displaced = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 44.0,
+      previousNodes = snapshot.previousNodes(baseline),
+      ghostNodes = listOf(LauncherIconGhostNode(450.0, 700.0, 80.0)),
+    )
+    assertTrue(hypot(displaced.single().x - baseline.single().x, displaced.single().y - baseline.single().y) > 1.0)
+    val staleRelayout = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 44.0,
+      previousNodes = displaced,
+    )
+    assertTrue(
+      hypot(
+        staleRelayout.single().x - baseline.single().x,
+        staleRelayout.single().y - baseline.single().y,
+      ) > 1.0,
+    )
+
+    // Later ghost positions and other layout updates must not replace the pre-gesture snapshot.
+    snapshot.rememberIfAbsent(displaced)
+    val restored = LauncherIconLayout.build(
+      apps = listOf(app),
+      launchCounts = emptyMap(),
+      widthPx = 900,
+      heightPx = 1400,
+      minSizePx = 44.0,
+      maxSizePx = 44.0,
+      previousNodes = snapshot.previousNodes(displaced),
+    )
+    assertEquals(baseline.single().x, restored.single().x, 0.0001)
+    assertEquals(baseline.single().y, restored.single().y, 0.0001)
+
+    snapshot.onLayoutSettled(gestureGhostActive = true, layoutSettled = true)
+    assertEquals(baseline.single().x, snapshot.previousNodes(displaced).single().x, 0.0001)
+    snapshot.onLayoutSettled(gestureGhostActive = false, layoutSettled = false)
+    assertEquals(baseline.single().x, snapshot.previousNodes(displaced).single().x, 0.0001)
+    snapshot.onLayoutSettled(gestureGhostActive = false, layoutSettled = true)
+    assertEquals(displaced.single().x, snapshot.previousNodes(displaced).single().x, 0.0001)
+  }
+
+  @Test
   fun anchorPositionPullsIconWithoutFixingIt() {
     val app = sampleApps(1).first()
     val previous = listOf(
