@@ -43,7 +43,7 @@ internal fun MainActivity.updateLauncherIcons(apps: List<AppDetail> = cachedInst
     heightPx = canvasView.height,
     minSizePx = minIconSize,
     maxSizePx = maxIconSize,
-    previousNodes = previousIcons,
+    previousNodes = gestureGhostLayoutSnapshot.previousNodes(previousIcons),
     anchorPositions = homeIconAnchors,
     fixedPositions = fixedHomeIconPositions(),
     ghostNodes = gestureGhostNodes(),
@@ -170,7 +170,10 @@ internal fun MainActivity.gestureGhostNodes(): List<LauncherIconGhostNode> {
 }
 
 internal fun MainActivity.handleGestureGhostChanged(position: Point?) {
-  if (position != null) homeIconResetState = null
+  if (position != null) {
+    homeIconResetState = null
+    gestureGhostLayoutSnapshot.rememberIfAbsent(canvasView.launcherIcons)
+  }
   if (gestureGhostPosition == position) return
 
   gestureGhostPosition = position
@@ -285,6 +288,10 @@ internal fun MainActivity.advanceHomeIconResetStep() {
 }
 
 internal fun MainActivity.handleHomeIconLayoutSettled() {
+  gestureGhostLayoutSnapshot.onLayoutSettled(
+    gestureGhostActive = gestureGhostPosition != null,
+    layoutSettled = canvasView.hasSettledLauncherIconLayout,
+  )
   val state = homeIconResetState
   if (state == null) {
     return

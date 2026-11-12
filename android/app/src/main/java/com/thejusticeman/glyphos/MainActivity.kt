@@ -58,6 +58,7 @@ class MainActivity : Activity() {
   internal var dragOverridePositions: Map<String, Point> = emptyMap()
   internal var homeIconResetState: HomeIconResetState? = null
   internal var gestureGhostPosition: Point? = null
+  internal val gestureGhostLayoutSnapshot = GestureGhostLayoutSnapshot()
   internal var widgetPlacements: MutableMap<Int, WidgetPlacement> = mutableMapOf()
   internal var pendingWidgetAllocationId: Int? = null
   internal val activeDialogs = mutableSetOf<Dialog>()
