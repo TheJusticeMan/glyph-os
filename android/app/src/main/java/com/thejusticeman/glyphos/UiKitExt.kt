@@ -13,6 +13,7 @@ import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.CompoundButton
+import androidx.appcompat.widget.Toolbar
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import android.widget.ImageView
@@ -23,14 +24,18 @@ import android.widget.TextView
 // Pure UI factory methods: dialog scaffolding, typography, form rows, keyboard, colors.
 // No business logic — these only build or style views.
 
-internal fun MainActivity.screenDialogRoot(title: String, onBack: () -> Unit): LinearLayout {
+internal fun MainActivity.screenDialogRoot(
+  title: String,
+  onBack: () -> Unit,
+  toolbarContent: View? = null,
+): LinearLayout {
   return LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
     setPadding(dp(16), dp(8), dp(16), dp(12))
     setBackgroundColor(dialogBackgroundColor())
 
     val toolbar = MaterialToolbar(this@screenDialogRoot).apply {
-      setTitle(title)
+      setTitle(if (toolbarContent == null) title else "")
       setTitleTextColor(primaryTextColor())
       setNavigationIcon(R.drawable.ic_arrow_back_24)
       setNavigationIconTint(primaryTextColor())
@@ -41,6 +46,16 @@ internal fun MainActivity.screenDialogRoot(title: String, onBack: () -> Unit): L
       setContentInsetsRelative(0, 0)
       setContentInsetStartWithNavigation(0)
       setTitleMarginStart(dp(12))
+      if (toolbarContent != null) {
+        addView(
+          toolbarContent,
+          Toolbar.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.START or Gravity.CENTER_VERTICAL,
+          ),
+        )
+      }
     }
     addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
   }

@@ -1,7 +1,6 @@
 package com.thejusticeman.glyphos
 
 import android.app.Dialog
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.text.Editable
 import android.text.TextUtils
@@ -15,14 +14,13 @@ import android.view.Window
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.AbsListView
+import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
-import com.google.android.material.textfield.TextInputEditText
-import com.google.android.material.textfield.TextInputLayout
 
 // App data access and pickers: installed app cache, launch counts, app/gesture picker dialogs.
 
@@ -90,8 +88,19 @@ internal fun MainActivity.showAppPickerDialog(
   val priorityOrder = prioritizedTargetKeys.withIndex().associate { it.value to it.index }
   val adapter = AppListAdapter(this)
   lateinit var dialog: Dialog
-  val root = screenDialogRoot(title, onBack = { dialog.dismiss() })
-  lateinit var search: TextInputEditText
+  val search = EditText(this).apply {
+    hint = "Search..."
+    textSize = 16f
+    setTextColor(primaryTextColor())
+    setHintTextColor(secondaryTextColor())
+    setSingleLine(true)
+    gravity = Gravity.CENTER_VERTICAL
+    includeFontPadding = false
+    background = null
+    setPadding(dp(8), 0, dp(8), 0)
+    imeOptions = EditorInfo.IME_ACTION_SEARCH
+  }
+  val root = screenDialogRoot(title, onBack = { dialog.dismiss() }, toolbarContent = search)
   var selectionHandled = false
 
   fun selectApp(app: AppDetail) {
@@ -131,36 +140,14 @@ internal fun MainActivity.showAppPickerDialog(
     }
   }
 
-  val searchLayout = TextInputLayout(this).apply {
-    setBoxBackgroundMode(TextInputLayout.BOX_BACKGROUND_OUTLINE)
-    setHintEnabled(false)
-    setBoxCornerRadii(dp(24).toFloat(), dp(24).toFloat(), dp(24).toFloat(), dp(24).toFloat())
-    setStartIconDrawable(R.drawable.ic_search_24)
-    setStartIconContentDescription("Search apps")
-    setStartIconTintList(ColorStateList.valueOf(secondaryTextColor()))
-    setEndIconMode(TextInputLayout.END_ICON_CLEAR_TEXT)
-    minimumHeight = dp(56)
-  }
-  search = TextInputEditText(this).apply {
-    hint = "Search apps"
-    textSize = 16f
-    setTextColor(primaryTextColor())
-    setHintTextColor(secondaryTextColor())
-    setSingleLine(true)
-    imeOptions = EditorInfo.IME_ACTION_SEARCH
-    setOnEditorActionListener { _, actionId, event ->
-      val isEnterKey = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
-      if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE || isEnterKey) {
-        selectTopApp()
-      } else {
-        false
-      }
+  search.setOnEditorActionListener { _, actionId, event ->
+    val isEnterKey = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
+    if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE || isEnterKey) {
+      selectTopApp()
+    } else {
+      false
     }
   }
-  searchLayout.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-  root.addView(searchLayout, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-    bottomMargin = dp(12)
-  })
 
   val hint = bodyText("Top 5 similar apps are pinned first").apply {
     visibility = if (prioritizedTargetKeys.isEmpty()) View.GONE else View.VISIBLE
