@@ -1,17 +1,21 @@
-node_modules/
-.expo/
-dist/
-web-build/
-ios/
+# Gradle and Android build outputs
+.gradle/
+**/build/
+local.properties
+.cxx/
+*.hprof
+debug.keystore
+
+# IDE and operating-system files
+.idea/
+*.iml
+.DS_Store
+
+# Local secrets and temporary files
 *.jks
 *.p8
 *.p12
 *.key
-*.mobileprovision
-*.orig.*
-npm-debug.*
-yarn-debug.*
-yarn-error.*
 .env
-.DS_Store
+*.orig.*
 tmp/
