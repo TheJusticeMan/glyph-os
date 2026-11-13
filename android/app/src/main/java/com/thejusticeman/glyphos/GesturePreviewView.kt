@@ -1,11 +1,13 @@
 package com.thejusticeman.glyphos
 
 import android.content.Context
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.view.View
+import androidx.core.graphics.withTranslation
 
 class GesturePreviewView(context: Context) : View(context) {
   var points: List<Point> = emptyList()
@@ -15,11 +17,12 @@ class GesturePreviewView(context: Context) : View(context) {
     }
 
   private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.argb(96, 0, 0, 0)
+    color = Color.argb(56, 0, 0, 0)
     style = Paint.Style.STROKE
-    strokeWidth = dp(4).toFloat()
+    strokeWidth = dp(2).toFloat()
     strokeCap = Paint.Cap.ROUND
     strokeJoin = Paint.Join.ROUND
+    maskFilter = BlurMaskFilter(dp(3).toFloat(), BlurMaskFilter.Blur.NORMAL)
   }
   private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
@@ -41,6 +44,10 @@ class GesturePreviewView(context: Context) : View(context) {
     style = Paint.Style.FILL
   }
 
+  init {
+    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+  }
+
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     val size = resolveSize(dp(56), widthMeasureSpec)
     setMeasuredDimension(size, size)
@@ -54,10 +61,9 @@ class GesturePreviewView(context: Context) : View(context) {
 
     if (points.size < 2) return
     val previewPath = buildPreviewPath(points, width.toFloat(), height.toFloat(), dp(6).toFloat())
-    canvas.save()
-    canvas.translate(0f, dp(1).toFloat())
-    canvas.drawPath(previewPath, shadowPaint)
-    canvas.restore()
+    canvas.withTranslation(0f, dp(1).toFloat()) {
+      drawPath(previewPath, shadowPaint)
+    }
     canvas.drawPath(previewPath, strokePaint)
   }
 

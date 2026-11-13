@@ -1,6 +1,8 @@
 package com.thejusticeman.glyphos
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -9,6 +11,9 @@ import android.graphics.Rect
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.withSave
+import java.util.LinkedHashMap
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -29,6 +34,11 @@ private const val ICON_LAYOUT_SETTLE_PX = 0.6
 private const val EDIT_FRAME_ALPHA = 190
 private const val EDIT_RING_ALPHA = 72
 private const val EDIT_HALO_ALPHA = 55
+private const val GESTURE_SHADOW_ALPHA = 60
+private const val GESTURE_SHADOW_BLUR_DP = 4
+private const val GESTURE_SHADOW_OFFSET_DP = 1
+private const val GESTURE_SHADOW_INSET_DP = 8
+private const val GESTURE_SHADOW_CACHE_LIMIT = 40
 
 class GestureCanvasView(context: Context) : View(context) {
   var onGestureComplete: ((List<Point>) -> Unit)? = null
@@ -55,12 +65,15 @@ class GestureCanvasView(context: Context) : View(context) {
     }
   var gesturePathsByPackage: Map<String, List<Point>> = emptyMap()
     set(value) {
+      if (field != value) clearLauncherGestureShadowCache()
       field = value
       invalidate()
     }
   var showGesturePaths: Boolean = true
     set(value) {
+      if (field == value) return
       field = value
+      if (!value) clearLauncherGestureShadowCache()
       invalidate()
     }
   var trailEffect: Boolean = false
@@ -77,12 +90,22 @@ class GestureCanvasView(context: Context) : View(context) {
       invalidate()
     }
 
+  private data class CachedGestureShadow(
+    val pathHash: Int,
+    val baseSizePx: Int,
+    val insetPx: Int,
+    val bitmap: Bitmap,
+  )
+
   private val rawPoints = mutableListOf<Point>()
   private val trailParticles = mutableListOf<TrailParticle>()
+  private val launcherGestureShadowCache = LinkedHashMap<String, CachedGestureShadow>(16, 0.75f, true)
   private var targetLauncherIcons: List<LauncherIconNode> = emptyList()
   private var displayedLauncherIcons: List<LauncherIconNode> = emptyList()
   private val path = Path()
   private val iconBounds = Rect()
+  private val shadowBounds = Rect()
+  private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     style = Paint.Style.STROKE
@@ -99,13 +122,6 @@ class GestureCanvasView(context: Context) : View(context) {
   private val fallbackIconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     alpha = 180
-  }
-  private val launcherGestureShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.argb(112, 0, 0, 0)
-    style = Paint.Style.STROKE
-    strokeCap = Paint.Cap.ROUND
-    strokeJoin = Paint.Join.ROUND
-    strokeWidth = dp(5).toFloat()
   }
   private val launcherGesturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
@@ -299,6 +315,11 @@ class GestureCanvasView(context: Context) : View(context) {
     finishIconDrag(commit = false)
     clearNow()
     return true
+  }
+
+  override fun onDetachedFromWindow() {
+    clearLauncherGestureShadowCache()
+    super.onDetachedFromWindow()
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -515,6 +536,52 @@ class GestureCanvasView(context: Context) : View(context) {
     ).toFloat()
   }
 
+  private fun launcherGestureShadow(
+    packageName: String,
+    points: List<Point>,
+    baseSizePx: Int,
+  ): CachedGestureShadow {
+    val pointsHash = points.hashCode()
+    launcherGestureShadowCache[packageName]?.let { cached ->
+      if (cached.pathHash == pointsHash && cached.baseSizePx == baseSizePx) return cached
+      cached.bitmap.recycle()
+    }
+
+    val inset = dp(GESTURE_SHADOW_INSET_DP)
+    val bitmapSize = baseSizePx + inset * 2
+    val bitmap = createBitmap(bitmapSize, bitmapSize, Bitmap.Config.ARGB_8888)
+    val shadowPath = buildLauncherGesturePath(points, inset.toFloat(), inset.toFloat(), baseSizePx.toFloat())
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      color = Color.argb(GESTURE_SHADOW_ALPHA, 0, 0, 0)
+      style = Paint.Style.STROKE
+      strokeCap = Paint.Cap.ROUND
+      strokeJoin = Paint.Join.ROUND
+      strokeWidth = launcherGesturePaint.strokeWidth
+      maskFilter = BlurMaskFilter(dp(GESTURE_SHADOW_BLUR_DP).toFloat(), BlurMaskFilter.Blur.NORMAL)
+    }
+    Canvas(bitmap).withSave {
+      translate(0f, dp(GESTURE_SHADOW_OFFSET_DP).toFloat())
+      drawPath(shadowPath, shadowPaint)
+    }
+
+    val result = CachedGestureShadow(pointsHash, baseSizePx, inset, bitmap)
+    launcherGestureShadowCache[packageName] = result
+    while (launcherGestureShadowCache.size > GESTURE_SHADOW_CACHE_LIMIT) {
+      val eldest = launcherGestureShadowCache.entries.iterator()
+      val removed = eldest.next()
+      eldest.remove()
+      removed.value.bitmap.recycle()
+    }
+    return result
+  }
+
+  private fun clearLauncherGestureShadowCache() {
+    launcherGestureShadowCache.values.forEach { cached ->
+      if (!cached.bitmap.isRecycled) cached.bitmap.recycle()
+    }
+    launcherGestureShadowCache.clear()
+  }
+
   private fun drawLauncherIcons(canvas: Canvas) {
     for (icon in displayedLauncherIcons) {
       val scaledSize = icon.sizePx * iconScale
@@ -530,10 +597,14 @@ class GestureCanvasView(context: Context) : View(context) {
       val gesturePath = gesturePathsByPackage[icon.app.packageName]
       if (showGesturePaths && gesturePath != null && gesturePath.size >= 2) {
         val path = buildLauncherGesturePath(gesturePath, left.toFloat(), top.toFloat(), scaledSize.toFloat())
-        canvas.save()
-        canvas.translate(0f, dp(1).toFloat())
-        canvas.drawPath(path, launcherGestureShadowPaint)
-        canvas.restore()
+        val shadow = launcherGestureShadow(
+          icon.app.packageName,
+          gesturePath,
+          icon.sizePx.toInt().coerceAtLeast(1),
+        )
+        val shadowInset = (shadow.insetPx * iconScale).toInt()
+        shadowBounds.set(left - shadowInset, top - shadowInset, right + shadowInset, bottom + shadowInset)
+        canvas.drawBitmap(shadow.bitmap, null, shadowBounds, bitmapPaint)
         canvas.drawPath(path, launcherGesturePaint)
       } else {
         val drawable = icon.app.icon
