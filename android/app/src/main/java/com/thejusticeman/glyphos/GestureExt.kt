@@ -221,7 +221,7 @@ internal fun MainActivity.showMergeDialog(
   content.addView(seekBar)
 
   val dialog = fullScreenDialog()
-  val root = screenDialogRoot("Gesture Conflict Found")
+  val root = screenDialogRoot("Gesture Conflict Found", onBack = { dialog.dismiss() })
   root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
   val actions = dialogActions()
   actions.addView(primaryButton("Continue") {
@@ -261,16 +261,16 @@ internal fun MainActivity.targetLabel(
     return SpecialFunctions.find(actionId)?.label ?: gesture.label
   }
   gesture.packageName?.let { packageName ->
-    return appLabels[packageName] ?: packageName
+    return appLabels[packageName] ?: "Unavailable app"
   }
   return "No app assigned"
 }
 
 internal fun MainActivity.targetSubtitle(gesture: SavedGesture): String {
   gesture.specialActionId?.let { actionId ->
-    return SpecialFunctions.find(actionId)?.subtitle ?: "Special function"
+    return SpecialFunctions.find(actionId)?.subtitle ?: "Built-in action"
   }
-  return gesture.packageName ?: "No app assigned"
+  return if (gesture.packageName != null) "Android app" else "No app assigned"
 }
 
 internal fun MainActivity.previewColumn(title: String, points: List<Point>, preview: GesturePreviewView = GesturePreviewView(this)): View {

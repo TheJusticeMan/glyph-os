@@ -27,7 +27,7 @@ private const val PINCH_ICON_SCALE_RESPONSE = 2.0f
 private const val ICON_LAYOUT_ANIMATION_STEP = 0.22
 private const val ICON_LAYOUT_SETTLE_PX = 0.6
 private const val EDIT_FRAME_ALPHA = 190
-private const val EDIT_RING_ALPHA = 170
+private const val EDIT_RING_ALPHA = 72
 private const val EDIT_HALO_ALPHA = 55
 
 class GestureCanvasView(context: Context) : View(context) {
@@ -99,6 +99,13 @@ class GestureCanvasView(context: Context) : View(context) {
   private val fallbackIconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     alpha = 180
+  }
+  private val launcherGestureShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(112, 0, 0, 0)
+    style = Paint.Style.STROKE
+    strokeCap = Paint.Cap.ROUND
+    strokeJoin = Paint.Join.ROUND
+    strokeWidth = dp(5).toFloat()
   }
   private val launcherGesturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
@@ -522,7 +529,12 @@ class GestureCanvasView(context: Context) : View(context) {
 
       val gesturePath = gesturePathsByPackage[icon.app.packageName]
       if (showGesturePaths && gesturePath != null && gesturePath.size >= 2) {
-        canvas.drawPath(buildLauncherGesturePath(gesturePath, left.toFloat(), top.toFloat(), scaledSize.toFloat()), launcherGesturePaint)
+        val path = buildLauncherGesturePath(gesturePath, left.toFloat(), top.toFloat(), scaledSize.toFloat())
+        canvas.save()
+        canvas.translate(0f, dp(1).toFloat())
+        canvas.drawPath(path, launcherGestureShadowPaint)
+        canvas.restore()
+        canvas.drawPath(path, launcherGesturePaint)
       } else {
         val drawable = icon.app.icon
         if (drawable == null) {
@@ -615,9 +627,12 @@ class GestureCanvasView(context: Context) : View(context) {
       if (isDragging) {
         canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), ringRadius + dp(4), editHaloPaint)
       }
+      editRingPaint.alpha = if (isDragging) EDIT_FRAME_ALPHA else EDIT_RING_ALPHA
       editRingPaint.strokeWidth = dp(if (isDragging) 3 else 1).toFloat()
       canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), ringRadius, editRingPaint)
-      canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), dp(if (isDragging) 4 else 2).toFloat(), editFramePaint)
+      if (isDragging) {
+        canvas.drawCircle(icon.x.toFloat(), icon.y.toFloat(), dp(4).toFloat(), editFramePaint)
+      }
     }
   }
 

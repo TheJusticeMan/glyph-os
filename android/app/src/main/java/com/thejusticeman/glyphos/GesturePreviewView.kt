@@ -14,18 +14,26 @@ class GesturePreviewView(context: Context) : View(context) {
       invalidate()
     }
 
+  private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(96, 0, 0, 0)
+    style = Paint.Style.STROKE
+    strokeWidth = dp(4).toFloat()
+    strokeCap = Paint.Cap.ROUND
+    strokeJoin = Paint.Join.ROUND
+  }
   private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     style = Paint.Style.STROKE
-    strokeWidth = 2f
+    strokeWidth = dp(2).toFloat()
     strokeCap = Paint.Cap.ROUND
     strokeJoin = Paint.Join.ROUND
   }
 
   private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.textColorHint, Color.LTGRAY)
+    alpha = 88
     style = Paint.Style.STROKE
-    strokeWidth = 1f
+    strokeWidth = dp(1).toFloat()
   }
 
   private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -40,12 +48,16 @@ class GesturePreviewView(context: Context) : View(context) {
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    val radius = dp(8).toFloat()
+    val radius = dp(12).toFloat()
     canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), radius, radius, backgroundPaint)
     canvas.drawRoundRect(0.5f, 0.5f, width - 0.5f, height - 0.5f, radius, radius, borderPaint)
 
     if (points.size < 2) return
     val previewPath = buildPreviewPath(points, width.toFloat(), height.toFloat(), dp(6).toFloat())
+    canvas.save()
+    canvas.translate(0f, dp(1).toFloat())
+    canvas.drawPath(previewPath, shadowPaint)
+    canvas.restore()
     canvas.drawPath(previewPath, strokePaint)
   }
 

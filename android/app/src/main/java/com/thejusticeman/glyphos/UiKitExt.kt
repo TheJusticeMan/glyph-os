@@ -13,25 +13,36 @@ import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.CompoundButton
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.button.MaterialButton
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.Switch
+import com.google.android.material.materialswitch.MaterialSwitch
 import android.widget.TextView
 
 // Pure UI factory methods: dialog scaffolding, typography, form rows, keyboard, colors.
 // No business logic — these only build or style views.
 
-internal fun MainActivity.screenDialogRoot(title: String): LinearLayout {
+internal fun MainActivity.screenDialogRoot(title: String, onBack: () -> Unit): LinearLayout {
   return LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
-    setPadding(dp(16), dp(28), dp(16), dp(12))
+    setPadding(dp(16), dp(8), dp(16), dp(12))
     setBackgroundColor(dialogBackgroundColor())
-    addView(titleText(title, 22f), LinearLayout.LayoutParams(
-      ViewGroup.LayoutParams.MATCH_PARENT,
-      ViewGroup.LayoutParams.WRAP_CONTENT,
-    ).apply {
-      bottomMargin = dp(8)
-    })
+
+    val toolbar = MaterialToolbar(this@screenDialogRoot).apply {
+      setTitle(title)
+      setTitleTextColor(primaryTextColor())
+      setNavigationIcon(R.drawable.ic_arrow_back_24)
+      setNavigationIconTint(primaryTextColor())
+      setNavigationContentDescription("Back")
+      setNavigationOnClickListener { onBack() }
+      setBackgroundColor(android.graphics.Color.TRANSPARENT)
+      elevation = 0f
+      setContentInsetsRelative(0, 0)
+      setContentInsetStartWithNavigation(0)
+      setTitleMarginStart(dp(12))
+    }
+    addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
   }
 }
 
@@ -132,7 +143,7 @@ internal fun MainActivity.settingsSwitchRow(
   checked: Boolean,
   onChange: (Boolean) -> Unit,
 ): View {
-  lateinit var switch: Switch
+  lateinit var switch: CompoundButton
   return LinearLayout(this).apply {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER_VERTICAL
@@ -140,7 +151,7 @@ internal fun MainActivity.settingsSwitchRow(
     setPadding(0, dp(8), 0, dp(8))
     applySelectableItemBackground()
     addView(settingsTextColumn(label, summary), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-    switch = Switch(this@settingsSwitchRow).apply {
+    switch = MaterialSwitch(this@settingsSwitchRow).apply {
       isChecked = checked
       setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean -> onChange(isChecked) }
     }
@@ -220,7 +231,7 @@ internal fun MainActivity.bodyText(text: String): TextView {
 }
 
 internal fun MainActivity.primaryButton(text: String, onClick: () -> Unit): Button {
-  return Button(this).apply {
+  return MaterialButton(this).apply {
     this.text = text
     setOnClickListener { onClick() }
   }

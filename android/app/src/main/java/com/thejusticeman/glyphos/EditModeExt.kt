@@ -1,17 +1,15 @@
 package com.thejusticeman.glyphos
 
 import android.content.Intent
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
-import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -28,12 +26,12 @@ internal fun MainActivity.buildBottomSettingsBar(): View {
   val bar = LinearLayout(this).apply {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER
-    setPadding(dp(8), dp(10), dp(8), dp(10))
-    minimumHeight = dp(84)
+    setPadding(dp(8), dp(6), dp(8), dp(6))
+    minimumHeight = dp(76)
     background = GradientDrawable().apply {
-      setColor(Color.argb(190, 18, 18, 18))
-      cornerRadius = dp(8).toFloat()
-      setStroke(1, Color.argb(70, 255, 255, 255))
+      setColor(Color.argb(220, 29, 27, 32))
+      cornerRadius = dp(28).toFloat()
+      setStroke(dp(1), Color.argb(42, 255, 255, 255))
     }
     elevation = dp(8).toFloat()
     visibility = if (canvasView.editMode) View.VISIBLE else View.GONE
@@ -57,23 +55,31 @@ internal fun MainActivity.buildBottomSettingsBar(): View {
   }
 }
 
-internal fun MainActivity.bottomSettingsButton(text: String, iconRes: Int, onClick: () -> Unit): Button {
-  return Button(this).apply {
-    this.text = text
-    textSize = 12f
-    setTextColor(Color.WHITE)
-    isAllCaps = false
-    setBackgroundColor(Color.TRANSPARENT)
-    backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
-    minHeight = dp(68)
-    minimumHeight = dp(68)
+internal fun MainActivity.bottomSettingsButton(text: String, iconRes: Int, onClick: () -> Unit): View {
+  return LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
     gravity = Gravity.CENTER
-    setPadding(dp(6), dp(6), dp(6), dp(6))
-    setCompoundDrawablesWithIntrinsicBounds(0, iconRes, 0, 0)
-    compoundDrawablePadding = dp(4)
-    compoundDrawableTintList = ColorStateList.valueOf(Color.WHITE)
-    maxLines = 1
-    ellipsize = TextUtils.TruncateAt.END
+    minimumHeight = dp(64)
+    setPadding(dp(4), dp(4), dp(4), dp(4))
+    contentDescription = text
+    isClickable = true
+    isFocusable = true
+    applySelectableItemBackground()
+    addView(ImageView(this@bottomSettingsButton).apply {
+      setImageResource(iconRes)
+      setColorFilter(Color.WHITE)
+      contentDescription = null
+    }, LinearLayout.LayoutParams(dp(24), dp(24)))
+    addView(TextView(this@bottomSettingsButton).apply {
+      this.text = text
+      textSize = 12f
+      typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+      setTextColor(Color.WHITE)
+      gravity = Gravity.CENTER
+      maxLines = 1
+    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+      topMargin = dp(3)
+    })
     setOnClickListener { onClick() }
   }
 }
@@ -159,7 +165,7 @@ internal fun MainActivity.isTrashDropTargetHit(placement: WidgetPlacement): Bool
 internal fun MainActivity.showManagementDialog() {
   val dialog = fullScreenDialog()
 
-  val root = screenDialogRoot("Settings")
+  val root = screenDialogRoot("Settings", onBack = { dialog.dismiss() })
   val scroll = ScrollView(this)
   val list = LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
