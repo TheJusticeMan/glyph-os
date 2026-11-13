@@ -1,39 +1,34 @@
 # Gesture Math and Native Android Kotlin Guide
 
-This document records the exact gesture math used by the legacy React Native GlyphOS implementation and describes how to rebuild the same feature set from the ground up in native Android Kotlin.
+This document explains the gesture math and interaction pipeline used by the current native Android app.
 
-The legacy React Native implementation is based on these files:
+The main implementation is in these Kotlin files:
 
-- `legacy/react-native/src/utils/GestureNormalizer.ts`
-- `legacy/react-native/src/utils/GestureMatcher.ts`
-- `legacy/react-native/src/utils/GestureStorage.ts`
-- `legacy/react-native/src/components/GestureCanvas.tsx`
-- `legacy/react-native/src/components/GestureManagementScreen.tsx`
-- `legacy/react-native/src/components/MergeGestureDialog.tsx`
-- `legacy/react-native/src/components/AssignAppModal.tsx`
-- `legacy/react-native/App.tsx`
+- `android/app/src/main/java/com/thejusticeman/glyphos/GestureMath.kt`
+- `android/app/src/main/java/com/thejusticeman/glyphos/GestureCanvasView.kt`
+- `android/app/src/main/java/com/thejusticeman/glyphos/GestureExt.kt`
+- `android/app/src/main/java/com/thejusticeman/glyphos/GestureStore.kt`
+- `android/app/src/main/java/com/thejusticeman/glyphos/GesturePreviewView.kt`
 
-Note: the active matcher is the segment-angle / angular-difference matcher. It is not the older turning-signature plus Euclidean/cosine matcher mentioned in the README architecture table.
+The matcher averages segment-angle differences and accepts a match only when its score is strictly below `ANGULAR_THRESHOLD`.
 
 ## Data Model
 
-Every point is a 2D coordinate:
+Each point is a 2D coordinate:
 
-```ts
-interface Point {
-  x: number;
-  y: number;
-}
+```kotlin
+data class Point(val x: Double, val y: Double)
 ```
 
-Every saved gesture stores a normalized path:
+Each saved gesture stores a normalized path and its app or special-function target:
 
-```ts
-interface SavedGesture {
-  label: string;
-  packageName?: string;
-  normalizedPath: Point[];
-}
+```kotlin
+data class SavedGesture(
+  val label: String,
+  val packageName: String? = null,
+  val specialActionId: String? = null,
+  val normalizedPath: List<Point>,
+)
 ```
 
 `normalizedPath` is the canonical gesture representation. It is normally 40 points long.
@@ -45,6 +40,7 @@ Gesture constants:
 ```txt
 NUM_POINTS = 40
 ANGULAR_THRESHOLD = 0.5 radians
+MIN_GESTURE_LENGTH_PX = 200
 GESTURE_ADAPTATION_RATE = 0.05
 ```
 
@@ -53,45 +49,44 @@ GESTURE_ADAPTATION_RATE = 0.05
 Touch and UI timing constants:
 
 ```txt
-Long press duration = 800 ms
+Long press duration = 200 ms
 Long press movement cancel threshold = 10 px
 Canvas clear delay after release = 400 ms
-Feedback display duration = 2000 ms
-Feedback fade-in duration = 200 ms
 ```
 
-Trail rendering constants:
+Trail rendering constants in `GestureCanvasView`:
 
 ```txt
-TRAIL_SEGMENTS = 5
-TRAIL_MIN_OPACITY = 0.15
-TRAIL_OPACITY_RANGE = 0.85
-TRAIL_MAX_WIDTH = 7.5
-TRAIL_WIDTH_RANGE = 5
+TRAIL_PARTICLE_LIFETIME_MS = 650
+TRAIL_PARTICLE_MAX_ALPHA = 220
+TRAIL_PARTICLE_RADIUS_DP = 5
 ```
 
 Preview constants:
 
 ```txt
-Gesture management preview size = 52 px
-Merge dialog preview size = 56 px
-Preview padding = 6 px
+GesturePreviewView size = 56 dp
+Preview padding = 6 dp
 ```
 
-Storage keys:
+Gesture storage:
 
 ```txt
-glyph_os_gestures
+SharedPreferences file = glyph_os_native_store
+gesture key = glyph_os_gestures
+schema version = 2
+```
+
+Settings are stored in `glyph_os_settings` under these keys:
+
+```txt
 glyph_os_onboarding_done
 glyph_os_trail_effect
 glyph_os_launch_on_create_shortcut
 glyph_os_allow_backward_gestures
-```
-
-Stored gesture schema version:
-
-```txt
-STORAGE_SCHEMA_VERSION = 2
+glyph_os_auto_pick_only_search_result
+glyph_os_home_icon_scale
+glyph_os_show_gesture_paths
 ```
 
 ## Raw Gesture Capture
@@ -120,7 +115,7 @@ A long press opens the gesture management screen if the user holds for `800 ms` 
 totalMovement = sqrt(dx * dx + dy * dy)
 ```
 
-In the React Native code this uses `Math.hypot(gestureState.dx, gestureState.dy)`.
+In the Android view, this uses Kotlin's `hypot(dx, dy)`.
 
 On touch release, the raw path is normalized. If normalization fails, the stroke is ignored.
 
@@ -150,7 +145,7 @@ Invalid inputs:
 
 ```txt
 if rawPoints.size < 2 -> null
-if totalPathLength(rawPoints) == 0 -> null
+if totalPathLength(rawPoints) < MIN_GESTURE_LENGTH_PX -> null
 ```
 
 Spacing interval:
@@ -602,47 +597,17 @@ sy = (p.y - minY) * scale + offsetY
 
 The first preview command is `M sx sy`; later commands are `L sx sy`.
 
-## Trail Rendering Math
+## Trail Particle Rendering
 
-The optional trail effect splits the currently drawn raw path into five overlapping visual segments.
-
-For `n = points.size` and `seg = 0..4`:
+When the trail effect is enabled, `GestureCanvasView` records each touch point as a fading particle. For each particle, with `ageMs = nowMs - createdAtMs`:
 
 ```txt
-startIdx = floor(seg * (n - 1) / TRAIL_SEGMENTS)
-endIdx = min(n - 1, floor((seg + 1) * (n - 1) / TRAIL_SEGMENTS))
+life = 1 - clamp(ageMs / TRAIL_PARTICLE_LIFETIME_MS, 0, 1)
+alpha = floor(TRAIL_PARTICLE_MAX_ALPHA * life)
+radius = dp(TRAIL_PARTICLE_RADIUS_DP) * (0.35 + 0.65 * life)
 ```
 
-Skip the segment if:
-
-```txt
-endIdx <= startIdx
-slice.size < 2
-```
-
-Visual interpolation parameter:
-
-```txt
-t = seg / (TRAIL_SEGMENTS - 1)
-```
-
-Opacity:
-
-```txt
-opacity = TRAIL_MIN_OPACITY + t * TRAIL_OPACITY_RANGE
-opacity = 0.15 + t * 0.85
-```
-
-Stroke width:
-
-```txt
-strokeWidth = TRAIL_MAX_WIDTH - t * TRAIL_WIDTH_RANGE
-strokeWidth = 7.5 - t * 5
-```
-
-Segment `0` is oldest: opacity `0.15`, width `7.5`.
-
-Segment `4` is newest: opacity `1.0`, width `2.5`.
+Particles are removed when `ageMs >= TRAIL_PARTICLE_LIFETIME_MS`. The view requests another animation frame while any particles remain, producing a short fade-and-shrink trail.
 
 ## Persistence Shape
 
@@ -654,7 +619,7 @@ All gestures are stored under `glyph_os_gestures` as a versioned JSON envelope:
   "gestures": [
     {
       "label": "gesture_1700000000000",
-      "packageName": "com.example.app",
+      "specialActionId": "open_app_list",
       "normalizedPath": [
         { "x": 0, "y": 0 },
         { "x": 10, "y": 0 }
@@ -701,7 +666,7 @@ Language: Kotlin
 Minimum SDK: choose the lowest Android version you want to support
 ```
 
-Use the Android View system if you want the closest mental model to the current React Native code. Jetpack Compose also works, but a custom `View` maps directly to the existing canvas behavior.
+The current app uses Android Views and a custom `GestureCanvasView`. Continue with Views when extending its canvas interactions; Compose is also an option if you replace or bridge that surface.
 
 Recommended dependencies:
 
@@ -756,7 +721,7 @@ Add package visibility and launcher-home intent filters:
 
 ### 3. Match The Transparent Wallpaper Theme
 
-The React Native app shows the user's wallpaper behind the launcher. Use the same Android theme attributes:
+The launcher shows the user's wallpaper behind its transparent home surface. Use the Android theme attributes already applied by the app:
 
 ```xml
 <resources>
@@ -1213,7 +1178,7 @@ fun loadInstalledApps(context: Context): List<AppDetail> {
 }
 ```
 
-Filter search results exactly like the React Native service:
+Filter search results with `InstalledApps.filterApps()`:
 
 ```kotlin
 fun filterApps(apps: List<AppDetail>, query: String): List<AppDetail> {

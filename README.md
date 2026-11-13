@@ -2,7 +2,7 @@
 
 GlyphOS is a native Android Kotlin launcher built around gestures and a dynamic home canvas. Draw gestures to open apps, swipe up to open the app list, draw a sideways line to open Google, pinch to hide or reveal home icons, and long-press the home screen to edit the launcher surface.
 
-The active app lives in `android/`. The older Expo/React Native version has been archived in `legacy/react-native/`.
+The native Android app lives in `android/`.
 
 ## Features
 
@@ -19,7 +19,7 @@ The active app lives in `android/`. The older Expo/React Native version has been
 - Widget resize handles: focused widgets show corner handles in edit mode and can resize from any corner.
 - Trash drop target: dragging shows a trash target; drop widgets there to remove them, or app icons there to reset their launch count.
 - Widget picker: add widgets from an in-app picker grouped by app, with previews when available.
-- Native Android implementation: Kotlin Activity and custom Views, with no React Native runtime in the active app.
+- Native Android implementation: Kotlin Activity and custom Views.
 
 ## Requirements
 
@@ -113,17 +113,14 @@ android/app/src/main/java/com/thejusticeman/glyphos/
   SpecialFunctions.kt            Registry for internal assignable actions
   AppListAdapter.kt              Native app picker rows
 docs/                            Technical notes and math docs
-legacy/react-native/             Archived Expo/React Native implementation
 ```
 
 ## Documentation
 
-- [docs/codebase.md](docs/codebase.md) maps the native and archived source files, tests, resources, and build configuration.
+- [docs/codebase.md](docs/codebase.md) maps the native source files, tests, resources, and build configuration.
 - [docs/gesture-math-and-native-android.md](docs/gesture-math-and-native-android.md) records the exact gesture normalization and matching math.
 - [docs/home-icon-layout.md](docs/home-icon-layout.md) explains home icon sizing, anchors, repulsion, edit mode, reset behavior, gesture obstacles, and tuning constants.
 
 ## Notes
 
-- The active app does not require `npm install` or Expo commands.
-- `node_modules/` may still exist from the archived React Native history, but it is not part of the native Android build path.
 - The debug build may use `android/app/debug.keystore` when present; otherwise Gradle uses its normal debug signing behavior.

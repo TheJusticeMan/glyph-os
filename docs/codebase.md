@@ -1,6 +1,6 @@
 # GlyphOS Codebase Guide
 
-This guide maps the tracked source code, tests, Android resources, build configuration, and archived React Native implementation. The active launcher is the native Android application under `android/`; `legacy/react-native/` is a historical implementation and is not part of the current Android runtime.
+This guide maps the native source code, tests, Android resources, and build configuration for GlyphOS.
 
 For deeper algorithm explanations, see [gesture-math-and-native-android.md](gesture-math-and-native-android.md) and [home-icon-layout.md](home-icon-layout.md).
 
@@ -35,7 +35,7 @@ All paths below are relative to `android/app/src/main/java/com/thejusticeman/gly
 | `GestureCanvasView.kt`   | Custom home canvas: touch-state machine for taps, strokes, long press, pinch and icon dragging; icon and label drawing; edit visuals; gesture ghost reporting; icon-target interpolation; optional fading trail particles.                           |
 | `GestureMath.kt`         | Gesture data types and native algorithms: resampling to 40 points, angular comparison, forward/backward matching, match ranking, similar-target ranking, defaults, blending/adaptation, threshold checks, and merge bounds.                          |
 | `GestureExt.kt`          | Activity-level gesture orchestration: recognize or assign a stroke, bind a target, execute apps/special actions, adapt matched gestures, show merge/launch dialogs, persist and seed default gestures, and synchronize gesture paths shown on icons. |
-| `GestureStore.kt`        | Versioned JSON serialization and persistence for saved gestures; accepts the supported legacy array form while loading.                                                                                                                              |
+| `GestureStore.kt`        | Versioned JSON serialization and persistence for saved gestures; also reads the unversioned array storage format.                                                                                                                                     |
 | `GesturePreviewView.kt`  | Small native `View` that scales and draws a normalized path inside a preview box.                                                                                                                                                                    |
 | `HomeIconExt.kt`         | Selects visible home apps; computes icon layout inputs; manages drag anchors, ghost nodes, icon launch-count reset, sequential reset-layout animation, and anchor persistence.                                                                       |
 | `LauncherIconLayout.kt`  | Deterministic home-icon sizing and position solver. Creates automatic golden-angle anchors, applies fixed pins and soft anchors, resolves collisions against icon/ghost nodes, clamps to canvas, and computes reset slots.                           |
@@ -67,48 +67,6 @@ Paths are relative to `android/app/src/`.
 
 The native layout test covers gesture-ghost displacement, restoration from the captured pre-gesture layout, and retaining the snapshot until the return layout settles.
 
-## Archived React Native implementation
-
-All paths below are relative to `legacy/react-native/`. This directory is retained for historical reference; the root README identifies `android/` as the active app.
-
-### Runtime and feature code
-
-| File                                         | Responsibility                                                                                                                                                                                         |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `App.tsx`                                    | Former Expo app root: loads settings and saved gestures, controls onboarding/management screens, assigns and merges gestures, handles persistence and feedback, and orders likely apps for assignment. |
-| `index.ts`                                   | React Native registration entry point.                                                                                                                                                                 |
-| `src/utils/GestureNormalizer.ts`             | Defines 2D points and arc-length resampling to the canonical 40-point gesture path.                                                                                                                    |
-| `src/utils/GestureMatcher.ts`                | Gesture model and angular matcher; supports reverse direction, match/ranking, path blending, threshold checks, and merge-bound search.                                                                 |
-| `src/utils/GestureStorage.ts`                | AsyncStorage adapter for versioned gesture data, validation, migration, save, load, and clear.                                                                                                         |
-| `src/services/InstalledAppsService.ts`       | Wrapper around `react-native-launcher-kit` for installed-app retrieval, cache refresh, text filtering, and icon URI conversion.                                                                        |
-| `src/hooks/useInstalledApps.ts`              | React hook exposing installed apps, loading/error state, and refresh operation.                                                                                                                        |
-| `src/components/GestureCanvas.tsx`           | Former React Native gesture capture/drawing surface; normalizes and matches strokes and calls the root assignment/launch callbacks.                                                                    |
-| `src/components/GestureManagementScreen.tsx` | Former gesture library and settings UI, including previews, reassignment, deletion, and clearing gestures.                                                                                             |
-| `src/components/AssignAppModal.tsx`          | Searchable app assignment modal with prioritized matches and delayed search-field focus.                                                                                                               |
-| `src/components/MergeGestureDialog.tsx`      | Merge-versus-create decision UI with bounded interpolation slider and path previews.                                                                                                                   |
-| `src/components/FeedbackOverlay.tsx`         | Animated feedback pill for launch, no-match, saved, and error states.                                                                                                                                  |
-| `src/components/OnboardingScreen.tsx`        | Multi-step onboarding presentation and completion callback.                                                                                                                                            |
-
-### Archived React Native tests
-
-| File                                      | What it verifies                                                                                                      |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `src/__tests__/GestureNormalizer.test.ts` | Resampling validity, point count, spacing, and non-linear paths.                                                      |
-| `src/__tests__/GestureMatcher.test.ts`    | Angular match behavior, thresholds, direction handling, ranking, blending, and merge bounds.                          |
-| `src/__tests__/GestureStorage.test.ts`    | AsyncStorage load/save, schema migration, validation, and clearing.                                                   |
-| `src/__tests__/AppMergeFlow.test.tsx`     | App-level merge flow: accepting a merge updates the existing binding and does not leave a duplicate incoming binding. |
-
-### Archived build, plugin, and CI files
-
-- `package.json` and `package-lock.json`: archived npm scripts and pinned dependency graph.
-- `app.json`, `eas.json`, `tsconfig.json`, `babel.config.js`, and `react-native.config.js`: Expo/build, TypeScript, Babel, and native-module configuration.
-- `plugins/withLauncherKit.js`: Expo config plugin that amends the Android manifest for the launcher-kit integration.
-- `.github/workflows/ci.yml`: archived CI workflow for the React Native project.
-- `.github/workflows/release.yml`: archived release/build workflow.
-- `patches/react-native-launcher-kit+2.1.1.patch`: package patch applied to the archived native module dependency.
-- `README.md`: legacy-specific setup and usage notes.
-- `assets/`: four archived PNG app/splash/icon images; these are binary resources, not source code.
-
 ## Android build and resources
 
 ### Build and platform configuration
@@ -134,6 +92,6 @@ All paths below are relative to `legacy/react-native/`. This directory is retain
 
 ## Reading and testing the project
 
-Start with the root [README.md](../README.md), then the two algorithm/layout notes linked above. Native app code and tests live under `android/app/src/`; archived Expo code and its separate tests live under `legacy/react-native/`.
+Start with the root [README.md](../README.md), then the two algorithm/layout notes linked above. Native app code and tests live under `android/app/src/`.
 
-The root README documents the Android SDK/JDK requirements and canonical commands for debug assembly, installation, and native unit tests. The archived React Native dependency files are not prerequisites for building the current Android launcher.
+The root README documents the Android SDK/JDK requirements and canonical commands for debug assembly, installation, and native unit tests.
