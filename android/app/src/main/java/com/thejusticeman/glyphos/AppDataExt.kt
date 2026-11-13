@@ -82,6 +82,7 @@ internal fun MainActivity.showAppPickerDialog(
   title: String,
   prioritizedTargetKeys: List<String> = emptyList(),
   includeSpecialFunctions: Boolean = false,
+  searchHint: String = "Choose app...",
   onSelect: (AppDetail) -> Unit,
 ) {
   var apps = buildTargetList(includeSpecialFunctions, cachedInstalledApps())
@@ -89,7 +90,7 @@ internal fun MainActivity.showAppPickerDialog(
   val adapter = AppListAdapter(this)
   lateinit var dialog: Dialog
   val search = EditText(this).apply {
-    hint = "Search..."
+    hint = searchHint
     textSize = 16f
     setTextColor(primaryTextColor())
     setHintTextColor(secondaryTextColor())
@@ -305,6 +306,7 @@ internal fun MainActivity.gestureRow(gesture: SavedGesture, appLabel: String, ta
         1 -> {
           showAppPickerDialog(
             title = "Reassign Gesture",
+            searchHint = "App for gesture...",
             includeSpecialFunctions = true,
           ) { app ->
             savedGestures = savedGestures.map { current ->

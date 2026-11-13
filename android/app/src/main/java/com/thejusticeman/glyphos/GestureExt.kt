@@ -46,6 +46,7 @@ internal fun MainActivity.requestAssignApp(label: String, normalizedPath: List<P
 
   showAppPickerDialog(
     title = "Assign App to Gesture",
+    searchHint = "App for gesture...",
     prioritizedTargetKeys = prioritizedTargetKeys,
     includeSpecialFunctions = true,
   ) { selectedApp ->
@@ -152,6 +153,7 @@ internal fun MainActivity.executeSpecialFunction(actionId: String?): Boolean {
 internal fun MainActivity.showLaunchListDialog() {
   showAppPickerDialog(
     title = "Open App",
+    searchHint = "Open app...",
     includeSpecialFunctions = false,
   ) { app ->
     val launched = launchAppPackage(app.packageName)
