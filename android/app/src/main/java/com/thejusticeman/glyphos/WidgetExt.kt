@@ -96,7 +96,7 @@ internal fun MainActivity.showWidgetPickerDialog() {
   }
 
   val dialog = fullScreenDialog()
-  val root = screenDialogRoot("Add Widget")
+  val root = screenDialogRoot("Add Widget", onBack = { dialog.dismiss() })
   val list = LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
     setPadding(0, dp(4), 0, dp(12))

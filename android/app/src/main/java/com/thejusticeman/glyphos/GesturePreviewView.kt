@@ -1,11 +1,13 @@
 package com.thejusticeman.glyphos
 
 import android.content.Context
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.view.View
+import androidx.core.graphics.withTranslation
 
 class GesturePreviewView(context: Context) : View(context) {
   var points: List<Point> = emptyList()
@@ -14,23 +16,36 @@ class GesturePreviewView(context: Context) : View(context) {
       invalidate()
     }
 
+  private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(56, 0, 0, 0)
+    style = Paint.Style.STROKE
+    strokeWidth = dp(2).toFloat()
+    strokeCap = Paint.Cap.ROUND
+    strokeJoin = Paint.Join.ROUND
+    maskFilter = BlurMaskFilter(dp(3).toFloat(), BlurMaskFilter.Blur.NORMAL)
+  }
   private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorAccent, Color.WHITE)
     style = Paint.Style.STROKE
-    strokeWidth = 2f
+    strokeWidth = dp(2).toFloat()
     strokeCap = Paint.Cap.ROUND
     strokeJoin = Paint.Join.ROUND
   }
 
   private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.textColorHint, Color.LTGRAY)
+    alpha = 88
     style = Paint.Style.STROKE
-    strokeWidth = 1f
+    strokeWidth = dp(1).toFloat()
   }
 
   private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = context.themeColor(android.R.attr.colorBackgroundFloating, Color.WHITE)
     style = Paint.Style.FILL
+  }
+
+  init {
+    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
   }
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -40,12 +55,15 @@ class GesturePreviewView(context: Context) : View(context) {
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    val radius = dp(8).toFloat()
+    val radius = dp(12).toFloat()
     canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), radius, radius, backgroundPaint)
     canvas.drawRoundRect(0.5f, 0.5f, width - 0.5f, height - 0.5f, radius, radius, borderPaint)
 
     if (points.size < 2) return
     val previewPath = buildPreviewPath(points, width.toFloat(), height.toFloat(), dp(6).toFloat())
+    canvas.withTranslation(0f, dp(1).toFloat()) {
+      drawPath(previewPath, shadowPaint)
+    }
     canvas.drawPath(previewPath, strokePaint)
   }
 

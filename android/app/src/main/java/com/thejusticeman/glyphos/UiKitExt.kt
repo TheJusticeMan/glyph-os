@@ -2,10 +2,10 @@ package com.thejusticeman.glyphos
 
 import android.app.Dialog
 import android.content.Context
-import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -13,25 +13,52 @@ import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.CompoundButton
+import androidx.appcompat.widget.Toolbar
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.button.MaterialButton
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.Switch
+import com.google.android.material.materialswitch.MaterialSwitch
 import android.widget.TextView
+import java.util.function.Consumer
 
 // Pure UI factory methods: dialog scaffolding, typography, form rows, keyboard, colors.
 // No business logic — these only build or style views.
 
-internal fun MainActivity.screenDialogRoot(title: String): LinearLayout {
+internal fun MainActivity.screenDialogRoot(
+  title: String,
+  onBack: () -> Unit,
+  toolbarContent: View? = null,
+): LinearLayout {
   return LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
-    setPadding(dp(16), dp(28), dp(16), dp(12))
-    setBackgroundColor(dialogBackgroundColor())
-    addView(titleText(title, 22f), LinearLayout.LayoutParams(
-      ViewGroup.LayoutParams.MATCH_PARENT,
-      ViewGroup.LayoutParams.WRAP_CONTENT,
-    ).apply {
-      bottomMargin = dp(8)
-    })
+    setPadding(dp(16), dp(8), dp(16), dp(12))
+    setBackgroundColor(translucentSurfaceColor())
+
+    val toolbar = MaterialToolbar(this@screenDialogRoot).apply {
+      setTitle(if (toolbarContent == null) title else "")
+      setTitleTextColor(primaryTextColor())
+      setNavigationIcon(R.drawable.ic_arrow_back_24)
+      setNavigationIconTint(primaryTextColor())
+      setNavigationContentDescription("Back")
+      setNavigationOnClickListener { onBack() }
+      setBackgroundColor(android.graphics.Color.TRANSPARENT)
+      elevation = 0f
+      setContentInsetsRelative(0, 0)
+      setContentInsetStartWithNavigation(0)
+      setTitleMarginStart(dp(12))
+      if (toolbarContent != null) {
+        addView(
+          toolbarContent,
+          Toolbar.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.START or Gravity.CENTER_VERTICAL,
+          ),
+        )
+      }
+    }
+    addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
   }
 }
 
@@ -39,7 +66,7 @@ internal fun MainActivity.compactDialogRoot(title: String): LinearLayout {
   return LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
     setPadding(dp(24), dp(20), dp(24), dp(16))
-    setBackgroundColor(dialogBackgroundColor())
+    setBackgroundColor(translucentSurfaceColor())
     addView(titleText(title, 20f), LinearLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT,
       ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -65,7 +92,7 @@ internal fun MainActivity.actionButtonParams(): LinearLayout.LayoutParams {
 
 internal fun MainActivity.expandDialog(dialog: Dialog, showKeyboard: Boolean = false) {
   dialog.window?.apply {
-    setBackgroundDrawable(ColorDrawable(dialogBackgroundColor()))
+    setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
     val softInputMode = if (showKeyboard) {
       WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
         WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
@@ -75,17 +102,57 @@ internal fun MainActivity.expandDialog(dialog: Dialog, showKeyboard: Boolean = f
     setSoftInputMode(softInputMode)
     setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
   }
+  configureDialogBlur(dialog)
 }
 
 internal fun MainActivity.fullScreenDialog(): Dialog {
   return Dialog(this, R.style.FullscreenDialogTheme)
 }
 
+private fun MainActivity.configureDialogBlur(dialog: Dialog) {
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+  val window = dialog.window ?: return
+  val windowManager = getSystemService(WindowManager::class.java) ?: return
+  val decorView = window.decorView
+  var listenerRegistered = false
+
+  val blurListener = Consumer<Boolean> { blurEnabled ->
+    decorView.post {
+      if (dialog.isShowing) window.setDimAmount(if (blurEnabled) 0.12f else 0.32f)
+    }
+  }
+  fun registerBlurListener() {
+    if (!listenerRegistered) {
+      windowManager.addCrossWindowBlurEnabledListener(blurListener)
+      listenerRegistered = true
+    }
+  }
+  fun unregisterBlurListener() {
+    if (listenerRegistered) {
+      windowManager.removeCrossWindowBlurEnabledListener(blurListener)
+      listenerRegistered = false
+    }
+  }
+
+  window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND or WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+  window.attributes = window.attributes.apply {
+    setBlurBehindRadius(dp(24))
+  }
+  window.setDimAmount(if (windowManager.isCrossWindowBlurEnabled) 0.12f else 0.32f)
+
+  decorView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+    override fun onViewAttachedToWindow(view: View) = registerBlurListener()
+    override fun onViewDetachedFromWindow(view: View) = unregisterBlurListener()
+  })
+  if (decorView.isAttachedToWindow) registerBlurListener()
+}
+
 internal fun MainActivity.fitCompactDialog(dialog: Dialog) {
   dialog.window?.apply {
-    setBackgroundDrawable(ColorDrawable(dialogBackgroundColor()))
+    setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
     setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
   }
+  configureDialogBlur(dialog)
 }
 
 internal fun MainActivity.trackDialog(dialog: Dialog, onDismiss: (() -> Unit)? = null) {
@@ -132,7 +199,7 @@ internal fun MainActivity.settingsSwitchRow(
   checked: Boolean,
   onChange: (Boolean) -> Unit,
 ): View {
-  lateinit var switch: Switch
+  lateinit var switch: CompoundButton
   return LinearLayout(this).apply {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER_VERTICAL
@@ -140,7 +207,7 @@ internal fun MainActivity.settingsSwitchRow(
     setPadding(0, dp(8), 0, dp(8))
     applySelectableItemBackground()
     addView(settingsTextColumn(label, summary), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-    switch = Switch(this@settingsSwitchRow).apply {
+    switch = MaterialSwitch(this@settingsSwitchRow).apply {
       isChecked = checked
       setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean -> onChange(isChecked) }
     }
@@ -220,7 +287,7 @@ internal fun MainActivity.bodyText(text: String): TextView {
 }
 
 internal fun MainActivity.primaryButton(text: String, onClick: () -> Unit): Button {
-  return Button(this).apply {
+  return MaterialButton(this).apply {
     this.text = text
     setOnClickListener { onClick() }
   }
@@ -260,14 +327,4 @@ internal fun MainActivity.primaryTextColor(): Int = themeColor(android.R.attr.te
 
 internal fun MainActivity.secondaryTextColor(): Int = themeColor(android.R.attr.textColorSecondary, Color.DKGRAY)
 
-internal fun MainActivity.dialogBackgroundColor(): Int {
-  val themedColor = themeColor(android.R.attr.colorBackground, Color.TRANSPARENT)
-  if (Color.alpha(themedColor) > 0) return themedColor
-
-  val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
-  return if (nightMode == Configuration.UI_MODE_NIGHT_YES) {
-    Color.rgb(18, 18, 18)
-  } else {
-    Color.WHITE
-  }
-}
+internal fun MainActivity.translucentSurfaceColor(): Int = Color.argb(220, 29, 27, 32)

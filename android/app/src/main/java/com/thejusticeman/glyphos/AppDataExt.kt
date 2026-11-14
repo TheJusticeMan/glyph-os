@@ -1,10 +1,13 @@
 package com.thejusticeman.glyphos
 
 import android.app.Dialog
+import android.graphics.Color
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.Menu
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
@@ -12,8 +15,10 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.AbsListView
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 
@@ -77,14 +82,26 @@ internal fun MainActivity.showAppPickerDialog(
   title: String,
   prioritizedTargetKeys: List<String> = emptyList(),
   includeSpecialFunctions: Boolean = false,
+  searchHint: String = "Choose app...",
   onSelect: (AppDetail) -> Unit,
 ) {
   var apps = buildTargetList(includeSpecialFunctions, cachedInstalledApps())
   val priorityOrder = prioritizedTargetKeys.withIndex().associate { it.value to it.index }
   val adapter = AppListAdapter(this)
   lateinit var dialog: Dialog
-  val root = screenDialogRoot(title)
-  lateinit var search: EditText
+  val search = EditText(this).apply {
+    hint = searchHint
+    textSize = 16f
+    setTextColor(primaryTextColor())
+    setHintTextColor(secondaryTextColor())
+    setSingleLine(true)
+    gravity = Gravity.CENTER_VERTICAL
+    includeFontPadding = false
+    background = null
+    setPadding(dp(8), 0, dp(8), 0)
+    imeOptions = EditorInfo.IME_ACTION_SEARCH
+  }
+  val root = screenDialogRoot(title, onBack = { dialog.dismiss() }, toolbarContent = search)
   var selectionHandled = false
 
   fun selectApp(app: AppDetail) {
@@ -124,23 +141,14 @@ internal fun MainActivity.showAppPickerDialog(
     }
   }
 
-  search = EditText(this).apply {
-    hint = "Search apps"
-    textSize = 15f
-    setSingleLine(true)
-    imeOptions = EditorInfo.IME_ACTION_GO
-    setOnEditorActionListener { _, actionId, event ->
-      val isEnterKey = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
-      if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE || isEnterKey) {
-        selectTopApp()
-      } else {
-        false
-      }
+  search.setOnEditorActionListener { _, actionId, event ->
+    val isEnterKey = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
+    if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE || isEnterKey) {
+      selectTopApp()
+    } else {
+      false
     }
   }
-  root.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-    bottomMargin = dp(8)
-  })
 
   val hint = bodyText("Top 5 similar apps are pinned first").apply {
     visibility = if (prioritizedTargetKeys.isEmpty()) View.GONE else View.VISIBLE
@@ -155,10 +163,20 @@ internal fun MainActivity.showAppPickerDialog(
     }
     setOnScrollListener(object : AbsListView.OnScrollListener {
       private var lastFirstVisibleItem = 0
+      private var hasScrolledAwayFromTop = false
+
+      private fun isAtTop(list: AbsListView?): Boolean {
+        if (list == null || list.firstVisiblePosition != 0) return false
+        val firstChild = list.getChildAt(0) ?: return false
+        return firstChild.top >= list.paddingTop
+      }
 
       override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
         if (scrollState != AbsListView.OnScrollListener.SCROLL_STATE_IDLE) {
           hideKeyboard(search)
+        } else if (hasScrolledAwayFromTop && isAtTop(view)) {
+          hasScrolledAwayFromTop = false
+          showKeyboard(search)
         }
       }
 
@@ -168,6 +186,7 @@ internal fun MainActivity.showAppPickerDialog(
         visibleItemCount: Int,
         totalItemCount: Int,
       ) {
+        if (!isAtTop(view)) hasScrolledAwayFromTop = true
         if (firstVisibleItem > lastFirstVisibleItem) {
           hideKeyboard(search)
         }
@@ -213,7 +232,7 @@ internal fun MainActivity.showGestureLibraryDialog() {
   val dialog = fullScreenDialog()
 
   val appLabels = cachedAppLabels()
-  val root = screenDialogRoot("Gesture Library")
+  val root = screenDialogRoot("Gesture Library", onBack = { dialog.dismiss() })
 
   val scroll = ScrollView(this)
   val list = LinearLayout(this).apply {
@@ -226,7 +245,7 @@ internal fun MainActivity.showGestureLibraryDialog() {
   } else {
     savedGestures.forEach { gesture ->
       list.addView(gestureRow(gesture, targetLabel(gesture, appLabels), targetSubtitle(gesture), dialog))
-      list.addView(settingDivider())
+      list.addView(gestureLibraryDivider())
     }
   }
   list.addView(settingsActionRow("Clear all gestures", "Delete every saved gesture", destructive = true) {
@@ -255,62 +274,98 @@ internal fun MainActivity.gestureRow(gesture: SavedGesture, appLabel: String, ta
   val row = LinearLayout(this).apply {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER_VERTICAL
-    setPadding(0, dp(10), 0, dp(10))
+    minimumHeight = dp(80)
+    setPadding(dp(4), dp(10), dp(4), dp(10))
   }
 
   row.addView(GesturePreviewView(this).apply { points = gesture.normalizedPath })
 
   val labels = LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
-    setPadding(dp(12), 0, dp(8), 0)
+    setPadding(dp(16), 0, dp(8), 0)
   }
   labels.addView(TextView(this).apply {
     text = appLabel
     setTextColor(primaryTextColor())
-    textSize = 15f
+    textSize = 16f
     maxLines = 1
+    ellipsize = TextUtils.TruncateAt.END
   })
   labels.addView(TextView(this).apply {
     text = targetSubtitle
     setTextColor(secondaryTextColor())
     textSize = 12f
     maxLines = 1
+    ellipsize = TextUtils.TruncateAt.END
   })
   row.addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-  row.addView(primaryButton("Reassign") {
-    showAppPickerDialog(
-      title = "Reassign Gesture",
-      includeSpecialFunctions = true,
-    ) { app ->
-      savedGestures = savedGestures.map { current ->
-        if (current.label == gesture.label) {
-          current.copy(
-            packageName = app.packageName.takeUnless { app.isSpecialFunction() },
-            specialActionId = app.specialActionId,
-          )
-        } else {
-          current
+  val menuButton = ImageButton(this).apply {
+    setImageResource(R.drawable.ic_more_vert_24)
+    setColorFilter(secondaryTextColor())
+    contentDescription = "Actions for $appLabel gesture"
+    setPadding(0, 0, 0, 0)
+    applySelectableItemBackground()
+  }
+  row.addView(menuButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+
+  val popupMenu = PopupMenu(this, menuButton).apply {
+    menu.add(Menu.NONE, 1, 0, "Reassign")
+    menu.add(Menu.NONE, 2, 1, "Delete")
+    setOnMenuItemClickListener { item ->
+      when (item.itemId) {
+        1 -> {
+          showAppPickerDialog(
+            title = "Reassign Gesture",
+            searchHint = "App for gesture...",
+            includeSpecialFunctions = true,
+          ) { app ->
+            savedGestures = savedGestures.map { current ->
+              if (current.label == gesture.label) {
+                current.copy(
+                  packageName = app.packageName.takeUnless { app.isSpecialFunction() },
+                  specialActionId = app.specialActionId,
+                )
+              } else {
+                current
+              }
+            }.toMutableList()
+            persistGestures()
+            ownerDialog.dismiss()
+            showGestureLibraryDialog()
+          }
+          true
         }
-      }.toMutableList()
-      persistGestures()
-      ownerDialog.dismiss()
-      showGestureLibraryDialog()
+        2 -> {
+          showConfirmDialog(
+            title = "Delete Gesture",
+            message = "Delete ${gesture.label}?",
+            confirmText = "Delete",
+          ) {
+            savedGestures.removeAll { it.label == gesture.label }
+            persistGestures()
+            ownerDialog.dismiss()
+            showGestureLibraryDialog()
+          }
+          true
+        }
+        else -> false
+      }
     }
-  })
-  row.addView(primaryButton("Delete") {
-    showConfirmDialog(
-      title = "Delete Gesture",
-      message = "Delete ${gesture.label}?",
-      confirmText = "Delete",
-    ) {
-      savedGestures.removeAll { it.label == gesture.label }
-      persistGestures()
-      ownerDialog.dismiss()
-      showGestureLibraryDialog()
-    }
-  })
+  }
+  menuButton.setOnClickListener { popupMenu.show() }
   return row
+}
+
+internal fun MainActivity.gestureLibraryDivider(): View {
+  return View(this).apply {
+    setBackgroundColor(themeColor(android.R.attr.textColorHint, Color.LTGRAY))
+    alpha = 0.24f
+    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
+      leftMargin = dp(76)
+      rightMargin = dp(4)
+    }
+  }
 }
 
 internal fun MainActivity.handleLauncherIconTapped(app: AppDetail) {

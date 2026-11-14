@@ -1,5 +1,11 @@
 package com.thejusticeman.glyphos
 
 import android.app.Application
+import com.google.android.material.color.DynamicColors
 
-class MainApplication : Application()
+class MainApplication : Application() {
+  override fun onCreate() {
+    super.onCreate()
+    DynamicColors.applyToActivitiesIfAvailable(this)
+  }
+}
