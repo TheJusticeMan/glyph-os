@@ -163,10 +163,20 @@ internal fun MainActivity.showAppPickerDialog(
     }
     setOnScrollListener(object : AbsListView.OnScrollListener {
       private var lastFirstVisibleItem = 0
+      private var hasScrolledAwayFromTop = false
+
+      private fun isAtTop(list: AbsListView?): Boolean {
+        if (list == null || list.firstVisiblePosition != 0) return false
+        val firstChild = list.getChildAt(0) ?: return false
+        return firstChild.top >= list.paddingTop
+      }
 
       override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
         if (scrollState != AbsListView.OnScrollListener.SCROLL_STATE_IDLE) {
           hideKeyboard(search)
+        } else if (hasScrolledAwayFromTop && isAtTop(view)) {
+          hasScrolledAwayFromTop = false
+          showKeyboard(search)
         }
       }
 
@@ -176,6 +186,7 @@ internal fun MainActivity.showAppPickerDialog(
         visibleItemCount: Int,
         totalItemCount: Int,
       ) {
+        if (!isAtTop(view)) hasScrolledAwayFromTop = true
         if (firstVisibleItem > lastFirstVisibleItem) {
           hideKeyboard(search)
         }
