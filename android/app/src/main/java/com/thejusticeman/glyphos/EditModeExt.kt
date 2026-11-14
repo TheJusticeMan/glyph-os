@@ -29,7 +29,7 @@ internal fun MainActivity.buildBottomSettingsBar(): View {
     setPadding(dp(8), dp(6), dp(8), dp(6))
     minimumHeight = dp(76)
     background = GradientDrawable().apply {
-      setColor(Color.argb(220, 29, 27, 32))
+      setColor(translucentSurfaceColor())
       cornerRadius = dp(28).toFloat()
       setStroke(dp(1), Color.argb(42, 255, 255, 255))
     }

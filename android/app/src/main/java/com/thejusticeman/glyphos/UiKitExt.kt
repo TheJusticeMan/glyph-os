@@ -2,7 +2,6 @@ package com.thejusticeman.glyphos
 
 import android.app.Dialog
 import android.content.Context
-import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -32,7 +31,7 @@ internal fun MainActivity.screenDialogRoot(
   return LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
     setPadding(dp(16), dp(8), dp(16), dp(12))
-    setBackgroundColor(dialogBackgroundColor())
+    setBackgroundColor(translucentSurfaceColor())
 
     val toolbar = MaterialToolbar(this@screenDialogRoot).apply {
       setTitle(if (toolbarContent == null) title else "")
@@ -65,7 +64,7 @@ internal fun MainActivity.compactDialogRoot(title: String): LinearLayout {
   return LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
     setPadding(dp(24), dp(20), dp(24), dp(16))
-    setBackgroundColor(dialogBackgroundColor())
+    setBackgroundColor(translucentSurfaceColor())
     addView(titleText(title, 20f), LinearLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT,
       ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -91,7 +90,7 @@ internal fun MainActivity.actionButtonParams(): LinearLayout.LayoutParams {
 
 internal fun MainActivity.expandDialog(dialog: Dialog, showKeyboard: Boolean = false) {
   dialog.window?.apply {
-    setBackgroundDrawable(ColorDrawable(dialogBackgroundColor()))
+    setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
     val softInputMode = if (showKeyboard) {
       WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
         WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
@@ -109,7 +108,7 @@ internal fun MainActivity.fullScreenDialog(): Dialog {
 
 internal fun MainActivity.fitCompactDialog(dialog: Dialog) {
   dialog.window?.apply {
-    setBackgroundDrawable(ColorDrawable(dialogBackgroundColor()))
+    setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
     setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
   }
 }
@@ -286,14 +285,4 @@ internal fun MainActivity.primaryTextColor(): Int = themeColor(android.R.attr.te
 
 internal fun MainActivity.secondaryTextColor(): Int = themeColor(android.R.attr.textColorSecondary, Color.DKGRAY)
 
-internal fun MainActivity.dialogBackgroundColor(): Int {
-  val themedColor = themeColor(android.R.attr.colorBackground, Color.TRANSPARENT)
-  if (Color.alpha(themedColor) > 0) return themedColor
-
-  val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
-  return if (nightMode == Configuration.UI_MODE_NIGHT_YES) {
-    Color.rgb(18, 18, 18)
-  } else {
-    Color.WHITE
-  }
-}
+internal fun MainActivity.translucentSurfaceColor(): Int = Color.argb(220, 29, 27, 32)
