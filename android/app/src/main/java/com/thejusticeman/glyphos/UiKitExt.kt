@@ -20,6 +20,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import com.google.android.material.materialswitch.MaterialSwitch
 import android.widget.TextView
+import java.util.function.Consumer
 
 // Pure UI factory methods: dialog scaffolding, typography, form rows, keyboard, colors.
 // No business logic — these only build or style views.
@@ -112,18 +113,38 @@ private fun MainActivity.configureDialogBlur(dialog: Dialog) {
   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
   val window = dialog.window ?: return
   val windowManager = getSystemService(WindowManager::class.java) ?: return
+  val decorView = window.decorView
+  var listenerRegistered = false
 
-  window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-  if (windowManager.isCrossWindowBlurEnabled) {
-    window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-    window.setDimAmount(0.12f)
-    window.attributes = window.attributes.apply {
-      setBlurBehindRadius(dp(24))
+  val blurListener = Consumer<Boolean> { blurEnabled ->
+    decorView.post {
+      if (dialog.isShowing) window.setDimAmount(if (blurEnabled) 0.12f else 0.32f)
     }
-  } else {
-    window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-    window.setDimAmount(0.32f)
   }
+  fun registerBlurListener() {
+    if (!listenerRegistered) {
+      windowManager.addCrossWindowBlurEnabledListener(blurListener)
+      listenerRegistered = true
+    }
+  }
+  fun unregisterBlurListener() {
+    if (listenerRegistered) {
+      windowManager.removeCrossWindowBlurEnabledListener(blurListener)
+      listenerRegistered = false
+    }
+  }
+
+  window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND or WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+  window.attributes = window.attributes.apply {
+    setBlurBehindRadius(dp(24))
+  }
+  window.setDimAmount(if (windowManager.isCrossWindowBlurEnabled) 0.12f else 0.32f)
+
+  decorView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+    override fun onViewAttachedToWindow(view: View) = registerBlurListener()
+    override fun onViewDetachedFromWindow(view: View) = unregisterBlurListener()
+  })
+  if (decorView.isAttachedToWindow) registerBlurListener()
 }
 
 internal fun MainActivity.fitCompactDialog(dialog: Dialog) {
