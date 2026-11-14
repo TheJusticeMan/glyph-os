@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -100,10 +101,29 @@ internal fun MainActivity.expandDialog(dialog: Dialog, showKeyboard: Boolean = f
     setSoftInputMode(softInputMode)
     setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
   }
+  configureDialogBlur(dialog)
 }
 
 internal fun MainActivity.fullScreenDialog(): Dialog {
   return Dialog(this, R.style.FullscreenDialogTheme)
+}
+
+private fun MainActivity.configureDialogBlur(dialog: Dialog) {
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+  val window = dialog.window ?: return
+  val windowManager = getSystemService(WindowManager::class.java) ?: return
+
+  window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+  if (windowManager.isCrossWindowBlurEnabled) {
+    window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+    window.setDimAmount(0.12f)
+    window.attributes = window.attributes.apply {
+      setBlurBehindRadius(dp(24))
+    }
+  } else {
+    window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+    window.setDimAmount(0.32f)
+  }
 }
 
 internal fun MainActivity.fitCompactDialog(dialog: Dialog) {
@@ -111,6 +131,7 @@ internal fun MainActivity.fitCompactDialog(dialog: Dialog) {
     setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
     setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
   }
+  configureDialogBlur(dialog)
 }
 
 internal fun MainActivity.trackDialog(dialog: Dialog, onDismiss: (() -> Unit)? = null) {
