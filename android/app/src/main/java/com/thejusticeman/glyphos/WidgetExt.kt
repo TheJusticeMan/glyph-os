@@ -225,8 +225,18 @@ internal fun MainActivity.addWidgetPlacement(appWidgetId: Int, configured: Boole
   val placement = WidgetPlacement(
     appWidgetId = appWidgetId,
     provider = providerInfo.provider.flattenToString(),
-    x = ((canvasWidth - width) / 2).coerceAtLeast(0),
-    y = ((canvasHeight - height) / 2).coerceAtLeast(0),
+    x = WidgetGridSnap.position(
+      (canvasWidth - width) / 2,
+      width,
+      canvasWidth,
+      dp(WIDGET_GRID_SIZE_DP),
+    ),
+    y = WidgetGridSnap.position(
+      (canvasHeight - height) / 2,
+      height,
+      canvasHeight,
+      dp(WIDGET_GRID_SIZE_DP),
+    ),
     width = width,
     height = height,
     minWidth = minWidthPx,

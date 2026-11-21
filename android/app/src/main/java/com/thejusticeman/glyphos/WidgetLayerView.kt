@@ -58,8 +58,8 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
 
   private val editHandleThresholdPx = dp(42)
   private val minimumVisibleSizePx = dp(56)
-  private val gridSizePx = dp(24)
-  private val snapThresholdPx = dp(12)
+  private val gridSizePx = dp(WIDGET_GRID_SIZE_DP)
+  private val snapThresholdPx = dp(WIDGET_GRID_SIZE_DP / 2)
 
   private enum class TouchMode {
     NONE,
@@ -307,8 +307,8 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
   ): WidgetPlacement {
     var nextX = (touchStartX + deltaX).coerceIn(0, (width - placement.width).coerceAtLeast(0))
     var nextY = (touchStartY + deltaY).coerceIn(0, (height - placement.height).coerceAtLeast(0))
-    nextX = snapCoordinate(nextX, placement.width, true, appWidgetId) ?: nextX
-    nextY = snapCoordinate(nextY, placement.height, false, appWidgetId) ?: nextY
+    nextX = snapCoordinate(nextX, placement.width, true, appWidgetId)
+    nextY = snapCoordinate(nextY, placement.height, false, appWidgetId)
     return placement.copy(x = nextX, y = nextY, lastUpdated = System.currentTimeMillis())
   }
 
@@ -461,11 +461,24 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
       ResizeHandle.NONE -> return placement
     }
 
+    val resizingFromLeft =
+      activeResizeHandle == ResizeHandle.TOP_LEFT || activeResizeHandle == ResizeHandle.BOTTOM_LEFT
+    val resizingFromTop =
+      activeResizeHandle == ResizeHandle.TOP_LEFT || activeResizeHandle == ResizeHandle.TOP_RIGHT
+    val maxWidth = if (resizingFromLeft) touchStartX + touchStartWidth else width - touchStartX
+    val maxHeight = if (resizingFromTop) touchStartY + touchStartHeight else height - touchStartY
+    nextWidth = WidgetGridSnap.size(nextWidth, minWidth, maxWidth, gridSizePx)
+    nextHeight = WidgetGridSnap.size(nextHeight, minHeight, maxHeight, gridSizePx)
+    if (resizingFromLeft) nextX = touchStartX + touchStartWidth - nextWidth
+    if (resizingFromTop) nextY = touchStartY + touchStartHeight - nextHeight
+    nextX = WidgetGridSnap.position(nextX, nextWidth, width, gridSizePx)
+    nextY = WidgetGridSnap.position(nextY, nextHeight, height, gridSizePx)
+
     return placement.copy(
       x = nextX,
       y = nextY,
-      width = nextWidth.coerceAtLeast(minWidth),
-      height = nextHeight.coerceAtLeast(minHeight),
+      width = nextWidth,
+      height = nextHeight,
       lastUpdated = System.currentTimeMillis(),
     )
   }
@@ -558,19 +571,14 @@ class WidgetLayerView(context: Context) : FrameLayout(context) {
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
   }
 
-  private fun snapCoordinate(coord: Int, size: Int, isHorizontal: Boolean, excludeWidgetId: Int): Int? {
-    val candidates = mutableListOf<Int>()
-    gridSnapCandidate(coord, size)?.let(candidates::add)
-    candidates += widgetSnapCandidates(size, isHorizontal, excludeWidgetId)
-    val snapped = chooseNearestCandidate(coord, candidates)
-    val maxBound = if (isHorizontal) (width - size).coerceAtLeast(0) else (height - size).coerceAtLeast(0)
-    return snapped?.coerceIn(0, maxBound)
-  }
-
-  private fun gridSnapCandidate(coord: Int, size: Int): Int? {
-    val currentCenter = coord + size / 2
-    val snappedCenter = (currentCenter / gridSizePx) * gridSizePx
-    return snappedCenter - size / 2
+  private fun snapCoordinate(coord: Int, size: Int, isHorizontal: Boolean, excludeWidgetId: Int): Int {
+    val boundsSize = if (isHorizontal) width else height
+    val maxBound = (boundsSize - size).coerceAtLeast(0)
+    val gridCandidate = WidgetGridSnap.position(coord, size, boundsSize, gridSizePx)
+    val candidates = listOf(gridCandidate) + widgetSnapCandidates(size, isHorizontal, excludeWidgetId)
+      .map { candidate -> WidgetGridSnap.position(candidate, size, boundsSize, gridSizePx) }
+    val snapped = chooseNearestCandidate(coord, candidates) ?: gridCandidate
+    return snapped.coerceIn(0, maxBound)
   }
 
   private fun widgetSnapCandidates(size: Int, isHorizontal: Boolean, excludeWidgetId: Int): List<Int> {
