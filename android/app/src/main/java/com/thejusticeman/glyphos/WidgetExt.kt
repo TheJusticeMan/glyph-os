@@ -209,8 +209,6 @@ internal fun MainActivity.addWidgetPlacement(appWidgetId: Int, configured: Boole
 
   val minWidthPx = dp(providerInfo.minWidth.coerceAtLeast(120))
   val minHeightPx = dp(providerInfo.minHeight.coerceAtLeast(80))
-  val width = minWidthPx
-  val height = minHeightPx
   val canvasWidth = if (isCanvasViewInitialized && canvasView.width > 0) {
     canvasView.width
   } else {
@@ -221,6 +219,18 @@ internal fun MainActivity.addWidgetPlacement(appWidgetId: Int, configured: Boole
   } else {
     resources.displayMetrics.heightPixels
   }
+  val width = WidgetGridSnap.size(
+    size = minWidthPx,
+    minSize = minWidthPx,
+    maxSize = canvasWidth,
+    gridSize = WidgetGridSnap.cellSize(canvasWidth, WIDGET_GRID_CELLS),
+  )
+  val height = WidgetGridSnap.size(
+    size = minHeightPx,
+    minSize = minHeightPx,
+    maxSize = canvasHeight,
+    gridSize = WidgetGridSnap.cellSize(canvasHeight, WIDGET_GRID_CELLS),
+  )
 
   val placement = WidgetPlacement(
     appWidgetId = appWidgetId,
@@ -229,13 +239,13 @@ internal fun MainActivity.addWidgetPlacement(appWidgetId: Int, configured: Boole
       (canvasWidth - width) / 2,
       width,
       canvasWidth,
-      dp(WIDGET_GRID_SIZE_DP),
+      WIDGET_GRID_CELLS,
     ),
     y = WidgetGridSnap.position(
       (canvasHeight - height) / 2,
       height,
       canvasHeight,
-      dp(WIDGET_GRID_SIZE_DP),
+      WIDGET_GRID_CELLS,
     ),
     width = width,
     height = height,
